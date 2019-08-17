@@ -1,0 +1,406 @@
+---
+title: "LBB C1 Ambiya"
+author: "Ambiya Sang Aji"
+date: "May 18, 2019"
+output:
+  prettydoc::html_pretty:
+  theme: hpstr
+  fig_height: 7
+  fig_width: 10
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(prettydoc)
+library(gtools)
+library(caret)
+library(class)
+```
+
+#1. Logistic Regression
+
+##Read and Analze Data
+Data yang akan digunakan adalah data wholesale, dimana data ini adalah data customer annual spending dalam satuan monetary units (m.u.)  di berbagai macam kategori product, yang akan dilakukan disini adalah mencoba melakukan segmentasi custormer ke dalam dua kelas, Horeca (Hotel, Restaurant, Cafe) atau retail, dari data spending kategori product menggunakan dua algoritma, logistic regression dan K-NN, lalu membandingkan kedua algoritma tersebut
+
+Pertama, mari melihat tipe data tersebut
+
+```{r}
+whs <- read.csv("wholesale.csv")
+str(whs)
+```
+
+Oleh karena yang akan diprediksi adalah kolom channel, atau segmentasi dari pelanggan, akan dilakukan rename terhadap target agar lebih mudah untuk dibaca dan di interpretasikan, dengan cara membuat kolom baru berisi factor horeca dan retail dan menghapus kolom channel yang berisi data sebelumnya
+
+```{r}
+whs$Industry <- factor(whs$Channel, levels = c(1, 2), labels = c("horeca", "retail"))
+whs <- whs[,-1]
+```
+
+Melakukan pengecekan jumlah data dari masing masing class
+
+```{r}
+table(whs$Industry)
+```
+
+Jumlah data dari masing masing class tidak balance, jumlah class horeca sekitar 2 kali dari data class retail
+
+Dikarenakan data region merupakan data class, akan dilakukan one hot encoding terhadap data region
+
+```{r}
+whs$Region <- as.factor(whs$Region)
+```
+
+```{r}
+#cek jumlah masing masing class region
+table(whs$Region)
+```
+
+```{r}
+dmy <- dummyVars(" ~ Region", data = whs)
+addmy <- data.frame(predict(dmy, newdata = whs))
+#remove 1 variable yang memiliki class paling sedikit untuk menghindari singularity
+addmy <- addmy[,-2]
+whs <- whs[,-1]
+whs <- cbind(whs,addmy)
+```
+
+##Feature Scaling
+Melakukan scaling data dengan menggunakan metode z score, hasil one hot encode akan tetap dilakukan scaling
+
+```{r}
+whssc <- whs
+whssc[,-7] <- as.data.frame(lapply(whs[,-7],scale))
+```
+
+#Split Data Train dan Test
+Sebelum melanjutkan ke step selanjutnya, data akan di split terlebih dahulu menjadi data train dan test
+```{r}
+set.seed(121)
+id <- sample(nrow(whssc),(nrow(whssc)*0.8))
+whssc_train <- whssc[id,]
+whssc_test <- whssc[-id,]
+```
+
+##Feature Selection
+Pertama tama akan dilakukan segmentasi dengan menggunakan algoritma logistic regression
+akan dilakukan feature selection terhadap data tersebut dengan menggunakan metode stepwise
+
+```{r warning=FALSE}
+lr.0 <- glm(Industry ~ 1, data=whssc_train, family="binomial")
+lr.all <- glm(Industry ~ ., data=whssc_train, family="binomial") 
+```
+###Stepwise Backward
+```{r  warning=FALSE}
+lr.bw <- step(lr.all, direction="backward")
+```
+
+###Stepwise Forward
+```{r warning=FALSE}
+lr.fw <- step(lr.0, scope=list(lower=lr.0, upper=lr.all), direction="forward")
+```
+
+###Stepwise Both
+```{r  warning=FALSE}
+lr.bt <- step(lr.0, scope = list(upper=lr.all), direction="both")
+```
+
+Hasil fitur yang dihasilkan seluruh metode stepwise sama, yaitu detergents_paper, grocery, frozen, region 1
+
+Lalu akan dilakukan pengecekan coefficient dari variabel model
+
+```{r}
+summary(lr.bw)
+```
+Dari hasil diatas, terlihat tidak ada variabel yang menyebabkan perfect separation, penambahan nilai variabel grocery dan detergent paper berpengaruh secara positif terhadap probability dari target.
+Sedangkan penambahan nilai frozen dan region berpengaruh negative terhadap probability dari target
+
+Nilai odds dari model :
+```{r}
+exp(1.3364)
+exp(-0.9245)
+exp(4.3441)
+exp(-0.3675)
+```
+intepretasi nilai diatas adalah :<br>
+- Setiap *kenaikan 1 nilai* pada nilai grocery maka *kemungkinan* segment adalah "retail" naik sebesar 3.80532 kali<br>
+- Setiap *kenaikan 1 nilai* pada nilai frozen maka *kemungkinan* segment adalah "retail" naik sebesar 0.3967297 kali (turun)<br>
+- Setiap *kenaikan 1 nilai* pada nilai detergent Paper maka *kemungkinan* segment adalah "retail" naik sebesar 4.3441 kali<br>
+- Kemungkinan customer yang berada pada region 1 0.69 KALI lebih mungkin untuk customer tersebut berada pada segment retail (turun)<br>
+
+Kemudian akan mencoba melakukan prediksi terhadap data test dengan model yang telah dibentuk, acuan yang akan digunakan adalah balanced accuracy, dikarenakan tujuan dari pembuatan model adalah segmentasi customer, dan membutuhkan prediksi yang akurat terhadap kedua kelas. 
+
+Jumlah data dari masing masing kelas juga tidak balance, hal ini juga menjadi salah satu pertimbangan mengapa balanced accuracy dipilih untuk pengukuran nya, agar kesahan yang besar dari class yang memiliki data lebih sedikit lebih berpengaruh terhadap hasil evaluasi.
+
+##Predict Test Data
+Akan dilakukan pengecekan hasil balanced accuracy dari model
+
+```{r}
+pred <- predict(lr.bw,whssc_test, type ="response")
+ypred <- ifelse(pred>0.5,1,0)
+ypred <- factor(ypred, levels = c(0, 1), labels = c("horeca", "retail"))
+confusionMatrix(ypred, whssc_test$Industry, positive = "horeca")
+```
+
+Nilai balanced accuracy yang dihasilkan oleh model adalah 0.86. nilai yang dapat dikatakan cukup baik.
+
+Selanjutnya akan dilakukan pengecekan apakah pengaruh dari kolom yang dilakukan one hot encoding sebelumnya, jika tidak dilakukan scaling terhadap hasil dari model, untuk kasus ini output dari setiap step tidak akan dikeluarkan, namun hasil akhir nya saja yang akan ditampilkan dan summary dari hasilnya saja yang akan dijelaskan.
+
+#2. Logistic Regression 2
+
+```{r warning=FALSE, include=FALSE}
+whs[,-7:-9] <- as.data.frame(lapply(whs[,-7:-9],scale))
+set.seed(121)
+id <- sample(nrow(whs),(nrow(whs)*0.8))
+whs_train <- whs[id,]
+whs_test <- whs[-id,]
+lr.0wosc <- glm(Industry ~ 1, data=whs_train, family="binomial")
+lr.allwosc <- glm(Industry ~ ., data=whs_train, family="binomial") 
+lr.bwwosc <- step(lr.allwosc, direction="backward")
+lr.fwwosc <- step(lr.0wosc, scope=list(lower=lr.0wosc, upper=lr.allwosc), direction="forward")
+lr.btwosc <- step(lr.0wosc, scope = list(upper=lr.allwosc), direction="both")
+```
+
+Predictor yang dihasilkan sama untuk semua metode stepwise, dan sama dengan model sebelumnya. selanjutnya akan dilakukan pengecekan terhadap coefficient model tersebut
+
+```{r}
+summary(lr.bwwosc)
+```
+
+Nilai coefficient menunjukkan nilai yang berbeda dari model sebelumnya, namun grocery dan detergent sama sama berpengaruh positive tarhadap probability dari target, dan frozen, region berpengaruh negatif. sama dengan model sebelumnya. selanjutnya akan dilakukan pengecekan terhadap hasil prediksi dari model
+
+##Predict Test Data - Model 2
+
+```{r}
+predwosc <- predict(lr.bwwosc,whs_test, type ="response")
+ypredwosc <- ifelse(predwosc>0.5,1,0)
+ypredwosc <- factor(ypredwosc, levels = c(0, 1), labels = c("horeca", "retail"))
+confusionMatrix(ypredwosc, whs_test$Industry, positive = "horeca")
+```
+
+Hasil prediksi yang dihasilkan model yang melakukan scaling terhadap nilai one hot encoder dan yang tidak melakukan scaling dalam kasus ini sama.
+
+Selanjutnya akan dilakukan pembuatan model tanpa menggunakan data region.
+
+#3. Logistic Regression 3
+
+```{r warning=FALSE, include=FALSE}
+whs_train2 <- whs_train[,-8:-9]
+whs_test2 <- whs_test[,-8:-9]
+lr.0wocl <- glm(Industry ~ 1, data=whs_train2, family="binomial")
+lr.allwocl <- glm(Industry ~ ., data=whs_train2, family="binomial") 
+lr.bwwocl <- step(lr.allwocl, direction="backward")
+lr.fwwocl <- step(lr.0wocl, scope=list(lower=lr.0wocl, upper=lr.allwocl), direction="forward")
+lr.btwocl <- step(lr.0wocl, scope = list(upper=lr.allwocl), direction="both")
+```
+
+Feature yang dihasilkan sama, untuk seluruh metode stepwise, yaitu dtergent paper, grocery dan frozen. lalu akan dilakukan pengecekan coefficient
+
+```{r}
+summary(lr.bwwocl)
+```
+
+Sama dengan model sebelumnya, grocery dan detergent berpengaruh positif, sedangkan frozen berpengaruh negative
+
+##Predict Test Data - Model 3
+akan dilakukan prediksi terhadap data test
+
+```{r}
+predwocl <- predict(lr.bwwocl,whs_test2, type ="response")
+ypredwocl <- ifelse(predwocl>0.5,1,0)
+ypredwocl <- factor(ypredwocl, levels = c(0, 1), labels = c("horeca", "retail"))
+confusionMatrix(ypredwocl, whs_test2$Industry, positive = "horeca")
+```
+
+Prediksi yang dihasilkan meleset 1 dibandingkan dengan yang menggunakan variabel region
+
+#4. K-NN
+Selanjutnya akan melakukan prediksi dengan menggunakan algoritma K-NN. dikarenakan preprocessing sebelumnya telah dilakukan, akan langsung dilakukan kalkulasi nearest neighbornya dengan menggunakan 3 pendekatan yang sama dengan model logistic regression, yaitu Menggunakan One Hot Encoder dengan Scaling, tanpa scaling dan tanpa variable region
+```{r}
+round(sqrt(nrow(whs_train)),0)
+```
+root square dari jumlah row 19
+
+set variabel for data
+```{r}
+knn1 <- matrix(0, 10, 2)
+knn2 <- matrix(0, 10, 2)
+knn3 <- matrix(0, 10, 2)
+colnames(knn1) <- c("K","Bal Acc")
+colnames(knn2) <- c("K","Bal Acc")
+colnames(knn3) <- c("K","Bal Acc")
+```
+
+##Menggunakan One Hot Encoder dengan Scaling
+```{r}
+b <- 1
+for (i in seq(from=1, to=19, by=2)) {
+predlab1 <- knn(train = whssc_train[,-7], test = whssc_test[,-7], cl = whssc_train$Industry, k = i)
+conf <- confusionMatrix(predlab1, whssc_test$Industry, positive = "retail")
+knn1[b,1] <- i
+knn1[b,2] <- conf$byClass['Balanced Accuracy']
+b <- b+1 
+}
+knn1
+```
+
+Nilai terbaik dihasilkan oleh K  = 5, yang menghasilkan nilai balanced accuracy 0.93 untuk kasus one hot encoder dilakukan scaling. akan dilihat hasil dari confusion matrixnya
+```{r}
+predlab1 <- knn(train = whssc_train[,-7], test = whssc_test[,-7], cl = whssc_train$Industry, k = 5)
+confusionMatrix(predlab1, whssc_test$Industry, positive = "retail")
+```
+K-NN dengan one hot encoder di scaling mampu memprediksi nilai dengan kesalahan 2 row di setiap classnya
+
+##Menggunakan One Hot Encoder tanpa Scaling
+```{r}
+b <- 1
+for (i in seq(from=1, to=19, by=2))  {
+predlab2 <- knn(train = whs_train[,-7], test = whs_test[,-7], cl = whs_train$Industry, k = i )
+conf2 <- confusionMatrix(predlab2, whs_test$Industry, positive = "retail")
+knn2[b,1] <- i
+knn2[b,2] <- conf2$byClass['Balanced Accuracy']
+b <- b+1 
+}
+knn2
+```
+
+Nilai terbaik dihasilkan oleh K  = 3, yang menghasilkan nilai balanced accuracy 0.917 untuk kasus one hot encoder dilakukan scaling. nilai menurun dibandingkan dengan menggunakan scaling, dikarenakan algoritma K-NN menggunakan jarak vector sebagai base dar perhitungan nya, dikarenakan nilai tidak dilakukan scaling seperti dengan nilai variabel lain nya, nilai tersebut berpengaruh terhadap jarak dari scaling.
+
+akan dilihat hasil dari confusion matrixnya
+
+```{r}
+predlab2 <- knn(train = whs_train[,-7], test = whs_test[,-7], cl = whs_train$Industry, k = 3 )
+confusionMatrix(predlab2, whs_test$Industry, positive = "retail")
+```
+
+
+##Tanpa menggunakan variable region
+```{r}
+b <- 1
+for (i in seq(from=1, to=19, by=2))  {
+predlab3 <- knn(train = whs_train2[,-7], test = whs_test2[,-7], cl = whs_train2$Industry, k = i )
+conf3 <- confusionMatrix(predlab3, whs_test2$Industry, positive = "retail")
+knn3[b,1] <- i
+knn3[b,2] <- conf3$byClass['Balanced Accuracy']
+b <- b+1 
+}
+knn3
+```
+
+```{r}
+predlab3 <- knn(train = whs_train2[,-7], test = whs_test2[,-7], cl = whs_train2$Industry, k = 11)
+confusionMatrix(predlab3, whs_test2$Industry, positive = "retail")
+```
+
+Kesalahan prediksi lebih balance tanpa menggunakan variabel region ketimbang dengan menggunakan namun tidak di scale
+
+####Menggunakan One Hot Encoder dengan Scaling Ditambah Region 3
+Dikarenakan K-NN menggunakan base jarak vector sebagai penentuan klasifikasinya, ada asumsi jika menambahkan dummy variabel untuk region 3 tidak akan berpengaruh seperti dengan menggunakan logistic regression
+
+```{r}
+whs2 <- read.csv("wholesale.csv")
+whs2$Industry <- factor(whs2$Channel, levels = c(1, 2), labels = c("horeca", "retail"))
+whs2 <- whs2[,-1]
+whs2$Region <- as.factor(whs2$Region)
+dmy2 <- dummyVars(" ~ Region",data = whs2)
+addmy2 <- data.frame(predict(object = dmy2, newdata = whs2))
+whs3 <- whs2[,-1]
+whs3 <- cbind(whs3,addmy2)
+whssc2 <- whs3
+whssc2[,-7] <- as.data.frame(lapply(whs[,-7],scale))
+set.seed(121)
+id <- sample(nrow(whssc2),(nrow(whssc2)*0.8))
+whssc_train3 <- whssc2[id,]
+whssc_test3 <- whssc2[-id,]
+```
+```{r}
+knn4 <- matrix(0, 10, 2)
+colnames(knn4) <- c("K","Bal Acc")
+b <- 1
+for (i in seq(from=1, to=19, by=2))  {
+predlab4 <- knn(train = whssc_train3[,-7], test = whssc_test3[,-7], cl = whssc_train3$Industry, k = i )
+conf4 <- confusionMatrix(predlab4, whssc_test3$Industry, positive = "retail")
+knn4[b,1] <- i
+knn4[b,2] <- conf4$byClass['Balanced Accuracy']
+b <- b+1 
+}
+knn4
+```
+
+Sesuai dengan hipotesa, penambahan kolom region 3 tidak mempengaruhi dalam kasus algoritma K-NN
+
+Berikut confusion matrixnya
+
+```{r}
+predlab4 <- knn(train = whssc_train3[,-7], test = whssc_test3[,-7], cl = whssc_train3$Industry, k = 5 )
+confusionMatrix(predlab4, whssc_test3$Industry, positive = "retail")
+```
+
+#Additional Test - Gradient Descend for Logistic Regression
+
+Pertama tama melakukan inisialisasi data 
+```{r}
+#Inisialisasi Data (Menggunakan variabel yang sama dengan model sebelumnya), Memisahkan X (Predictor) dab Y(Target)
+X <- whssc_train3[,c("Detergents_Paper","Grocery","Frozen","Region.1")]
+y <- as.numeric(factor(whssc_train3$Industry, levels = c("horeca", "retail"), labels = c(0,1)))-1
+#Inisialisasi data untuk intercept
+X$ones <- 1
+Xtest <- whssc_test3[,c("Detergents_Paper","Grocery","Frozen","Region.1")]
+ytest <- whssc_test3$Industry
+#Inisialisasi data untuk intercept
+Xtest$ones <- 1
+#ubah X sebagai matrix
+X <- as.matrix(X)
+y <- as.matrix(y)
+Xtest <- as.matrix(Xtest)
+```
+
+Membuat fungsi algoritma Gradient Descend
+
+```{r}
+#Intial theta
+init_theta <- rep(0,ncol(X))
+sigmoid <- function(z){
+g <- 1/(1+exp(-z))
+return(g)
+}
+
+#Cost Function
+cost <- function(theta)
+{
+m <- as.numeric(nrow(X))
+g <- sigmoid(X%*%theta)
+J <- (1/m)*sum((-y*log(g)) - ((1-y)*log(1-g)))
+return(J)
+}
+
+#init cost
+cost(init_theta)
+
+#Derive theta using gradient descent using optim function
+theta_optim <- optim(par=init_theta, fn=cost)
+
+#set theta
+theta <- theta_optim$par
+
+#cost at optimal value of the theta
+theta_optim$value
+
+cat("Coefficient : \n Detergents_Paper :",theta[1],"\n","Grocery :",theta[2],"\n","Frozen :",theta[3],"\n","Region.1 :",theta[4],"\n","Intercept :",theta[5])
+```
+
+```{r}
+pred5 <- inv.logit(rowSums(t(theta*t(Xtest))))
+ypred5 <- ifelse(pred5>0.5,1,0)
+ypred5 <- as.factor(ypred5)
+ypred5 <- factor(ypred5, levels = c(0,1), labels = c("horeca","retail"))
+confusionMatrix(ypred5, ytest)
+```
+
+Nilai Balanced Accuracy dari Algoritma Gradient Descend adalah 0.8676, sama dengan prediksi menggunakan glm
+
+#Summary
+- Dalam kasus ini, algoritma K-NN menghasilkan nilai yang paling baik, yaitu nilai balanced accuracynya 0.9353, dibandingkan logistic regression dengan balanced accuracy 0.8676
+- Untuk K-NN, possible untuk dilakukan pembuatan dummy variable untuk semua nilai kelas sebuah variabel, dikarenakan base dari algoritma K-NN adalah perhitungan vector, yang tidak memiliki pengaruh akibat dari "singularity"
+- K-NN tidak memiliki model, dan hasil dari K-NN hanya berupa label, tidak dapat dihitung confidence intervalnya 
+
+#End Report
