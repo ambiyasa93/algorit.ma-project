@@ -1,0 +1,238 @@
+---
+title: "LBB 7"
+author: "Ambiya Sang Aji"
+date: "May 31, 2019"
+output:
+  html_document:
+    theme: cosmo
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: false
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(FactoMineR)
+```
+#LBB - Unsupervised Learning
+Dalam laporan ini, data yang digunakan adalah data customer credit card. data diambil dari website kaggle, akan dicoba untuk melakukan clustering dengan menggunakan algoritma k-means, dan dibandingkan dengan menggunakan algoritma k-means + PCA preprocessing untuk mencari segmentasi customer.
+
+Deskripsi dari field data yang akan digunakan adalah :
+
+CUST_ID : Identification of Credit Card holder (Categorical) 
+BALANCE : Balance amount left in their account to make purchases
+BALANCE_FREQUENCY : How frequently the Balance is updated, score between 0 and 1 (1 = frequently updated, 0 = not frequently updated) 
+PURCHASES : Amount of purchases made from account 
+ONEOFF_PURCHASES : Maximum purchase amount done in one-go 
+INSTALLMENTS_PURCHASES : Amount of purchase done in installment 
+CASH_ADVANCE : Cash in advance given by the user 
+PURCHASES_FREQUENCY : How frequently the Purchases are being made, score between 0 and 1 (1 = frequently purchased, 0 = not frequently purchased) 
+ONEOFFPURCHASESFREQUENCY : How frequently Purchases are happening in one-go (1 = frequently purchased, 0 = not frequently purchased) 
+PURCHASESINSTALLMENTSFREQUENCY : How frequently purchases in installments are being done (1 = frequently done, 0 = not frequently done) 
+CASHADVANCEFREQUENCY : How frequently the cash in advance being paid 
+CASHADVANCETRX : Number of Transactions made with "Cash in Advanced" 
+PURCHASES_TRX : Number of purchase transactions made 
+CREDIT_LIMIT : Limit of Credit Card for user 
+PAYMENTS : Amount of Payment done by user 
+MINIMUM_PAYMENTS : Minimum amount of payments made by user 
+PRCFULLPAYMENT : Percent of full payment paid by user TENURE : Tenure of credit card service for user
+
+Akan dilakukan pengecekan terhadap data terlebih dahulu
+
+#Read and Analyze Data
+```{r}
+cc <- read.csv("CC GENERAL.csv") 
+head(cc)
+```
+Column 1 akan dihapus karena column tersebut hanya berisi ID
+
+jika dilihat banyak data yang nilai nya 0, namun secara deskripsi dari field di data, angka 0 disini bukanlah missing value, selanjutnya akan dilakukan perhitungan missing value untuk seluruh column
+
+```{r}
+cc <- cc[,-1]
+countnull<-matrix(data=NA,ncol=ncol(cc),nrow=1)
+for (i in 1:ncol(cc)) {
+countnull[1,i] <- sum(is.na(cc[,i]))
+}
+countnull
+```
+
+dapat dilihat yang memiliki missing value hanya data di kolom ke 15, atau data minimum payments, jumlhnya ada 313 atau hanya sekitar 3%, dikarenakan data ini sangat sedikit, data ini akan dihapus
+
+```{r}
+cc <- na.omit(cc)
+```
+
+Akan dilakukan pengecekan atribut tipe data
+
+```{r}
+str(cc)
+```
+
+Tipe data dari seluruh field sudah menggunakan numeric dan integer, data ini sudah aman untuk dilakukan clustering.
+
+Sebelum melakukan clustering, akan dibuat satu variabel yang menampung data yang dilakukan scaling terlebih dahulu
+
+```{r}
+cc_s <- scale(cc)
+```
+
+#Cluseting Menggunakan K-Means
+Data telah dilakukan pengecekan dan preprocessing, selanjutnya akan dilakukan clustering dengan hanya menggunakan algoritma k-means. akan dilakukan pengecekan set terbaik dengan mengecek wss terkecil dan k-terbaik menggunakan metode elbow point
+
+```{r}
+countwss<-matrix(data=NA,ncol=2,nrow=20)
+x <- 1
+for (i in seq(10, 200, by = 10))  {
+      set.seed(i)
+      countwss[x,1] <- i
+      countwss[x,2] <- sum(kmeans(cc_s, 3)$withinss)
+      x <- x+1
+}
+apply(countwss,2,sort)
+```
+
+set seed 10-40 adalah set seed yang memiliki nilai wss terendah, akan dilakukan pemilihan k terbaik dengan menggunakan set seed 30
+
+```{r}
+wss <- function(data, maxCluster = 30) {
+    # Initialize within sum of squares
+    SSw <- (nrow(data) - 1) * sum(apply(data, 2, var))
+    SSw <- vector()
+    set.seed(30)
+    for (i in 2:maxCluster) {
+        SSw[i] <- sum(kmeans(data, centers = i)$withinss)
+    }
+    plot(1:maxCluster, SSw, type = "o", xlab = "Number of Clusters", ylab = "Within groups sum of squares", pch=19)
+}
+wss(cc_s)
+```
+
+Berdasarkan pengamatan, nilai cluster yang paling baik adalah di angka 8, dikarenakan jika nilai k > 8, menghasilkan penurunan dari steep yang cukup signifikan. yang berarti penurunan nilai wssnya juga tidak signifikan.
+
+Melakukan proses cluster dengan nilai k = 8
+```{r}
+set.seed(30)
+clus_cc <- kmeans(cc_s, 8)
+#assign cluster ke column baru di data awal
+cc$clust <- as.factor(clus_cc$cluster)
+```
+#Plot cluster using PCA as tools
+Akan dilakukan visualisasi dari data dengan menggunakan bantuan PCA dan membuat biplot untuk dapat memberi bantuan melakukan analisa terhadap data
+```{r}
+# creates biplots
+cc_s.pca<-PCA(cc_s, graph = F)
+plot(cc_s.pca, choix=c("ind"), label="none", col.ind=cc$clust)
+legend("topright", levels(cc$clust), pch=19, col=1:8)
+```
+
+```{r}
+biplot(prcomp(cc_s, scale=F), cex=0.6, xlim = c(-0.01, 0.04), ylim = c(-0.02, 0.04), xlabs=rep("", nrow(cc_s)))
+```
+
+#Summary Cluster
+Akan dilakukan summary dari masing-masing cluster untuk melakukan analisa terhadap cluster dengan bantuan plot
+```{r}
+summary(cc[cc$clust==1,])
+```
+
+```{r}
+summary(cc[cc$clust==2,])
+```
+
+```{r}
+summary(cc[cc$clust==3,])
+```
+
+```{r}
+summary(cc[cc$clust==4,])
+```
+
+```{r}
+summary(cc[cc$clust==5,])
+```
+
+
+```{r}
+summary(cc[cc$clust==6,])
+```
+
+
+```{r}
+summary(cc[cc$clust==7,])
+```
+
+```{r}
+summary(cc[cc$clust==8,])
+```
+#Analisis Cluster
+Berdasarkan plot dan summary diatas, akan dilakukan analisis terhadap cluster :
+
+Cluster 4, berisi data yang lebih mengarah ke kategori customer yang lebih sering melakukan transaksi advance cash, dengan nilai balance yang rata ratanya tinggi, dan cenderung sering melakukan minimum payment.
+Cluster 2, adalah kategori customer yang mirip dengan cluster 8, dapat dikatakan versi cluster 8 yang lebih menengah dari segi transaksi, balance, dll
+Cluster 8 lebih mengarah ke kategori customer yang perilakunya lebih sering melakukan transaksi one off purchase, regular purchase dan melakukan installment, atau dengan kata lain customer yang primary penggunaanya untuk melakukan transaksi pembelian, dalam cluster ini secara rata rata cukup tinggi melakukan minimum payment.
+Cluster 3 adalah kategori customer yang sangat mirip dengan cluster 3, dapat dikatakan versi extrim dari cluster 3 dalam melakukan transaksi.
+Cluster 6 dan 7 adalah orang yang cenderung lebih balance dalam melakukan transaksi, kategori pengguna kartu kasual untuk melakukan berbagai macam transaksi. secara data mirip dengan karakter cluster 3 dan 2 versi kasual
+Cluster 1 adalah kategori customer yang jarang bertransaksi
+Cluster 5 adalah customer yang jarang bertransaksi, namun lebih banyak bertransaksi ketimbang cluster 1, kecenderungan transaksinya agak condong mirip dengan cluster 8, walaupun tidak terlihat dominan sekali
+
+Secara bisnis, dirasa hanya dengan 4 cluster dapat menggambarkan kategori customer, hipotesanya adalah
+kategori advanced cash (dibagi 2, customer premium yang sering dan bertransaksi dalam jumlah besar dan versi customer "casual")
+Kategori transaksi (dibagi 2, customer premium yang sering dan bertransaksi dalam jumlah besar dan versi customer "casual")
+Kategori customer yang jarang melakukan transaksi
+
+Akan dilakukan perobaan untuk melakukan clustering dengan menggunakan nilai k = 5
+
+#Clustering dengan nilai K = 5
+
+```{r}
+set.seed(30)
+clus_cc2 <- kmeans(cc_s, 5)
+cc2 <- cc
+#assign cluster ke column baru di data awal
+cc2$clust <- as.factor(clus_cc2$cluster)
+```
+
+```{r}
+plot(cc_s.pca, choix=c("ind"), label="none", col.ind=cc2$clust)
+legend("topright", levels(cc2$clust), pch=19, col=1:5)
+```
+
+Hasil yang dihasilkan proses clustering, mirip dengan hipotesa penulis, secara statistik, nilai k yang bagus ada di nilai sekitar 8, namun belum tentu secara bisnis, penulis merasa nilai k=5 lebih cocok untuk pendekatan secara bisnis
+
+Hal ini dapat digunakan untuk menentukan jenis product yang akan dibentuk, limit dari kartu dan Promo yang akan ditawarkan kepada nasabah
+
+Selanjutnya akan dilakukan percobaan dengan melakukan PCA terlebih ahulu kepada data, sebagai metode untuk preprocessing, lalu dilakukan clustering menggunakan k-means dengan parameter yang sama dengan percobaan sebelumnya
+
+#Percobaan K-means dengan menggunakan PCA sebagai metode Pre Process
+##Melakukan Pengecekan Hasil PCA
+```{r}
+summary(cc_s.pca)
+```
+
+Terlihat dari summary bahwa dengan menggunakan 16 dim saja telah dapat mewakilkan 100% data awal, akan diambil 16 PC untuk dilakukan k-means
+
+```{r}
+cc_s.pcax <- cc_s.pca$call$X[,1:16]
+set.seed(30)
+clus_cc2 <- kmeans(cc_s.pca$call$X, 8)
+```
+
+```{r}
+cc3<-cc2
+cc3$clust <- as.factor(clus_cc2$cluster)
+plot(cc_s.pca, choix=c("ind"), label="none", col.ind=cc3$clust)
+legend("topright", levels(cc3$clust), pch=19, col=1:8)
+```
+
+Secara hasil tidak dapat dilihat perbedaan nya dengan tanpa pre processing PCA, akan dilihat untuk nilai WSSnya untuk beberapa nilai K
+
+```{r}
+wss(cc_s.pcax)
+```
+
+Secara nilai WSS juga tidak dapat dilihat perbedaan yang signifikan
+
+#End Report
