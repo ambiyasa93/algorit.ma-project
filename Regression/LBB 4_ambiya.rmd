@@ -1,0 +1,369 @@
+---
+title: "LBB Regression"
+author: "Ambiya Sang Aji"
+date: "May 9, 2019"
+output:
+  prettydoc::html_pretty:
+  theme: hpstr
+  fig_height: 7
+  fig_width: 10
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(prettydoc)
+library(ggplot2)
+library(GGally)
+library(car)
+library(leaps)
+library(lmtest)
+```
+
+
+#Read Data dan merubah nama kolom agar lebih mudah untuk diinterpretasikan
+```{r}
+crime <- read.csv("crime.csv")
+#remove column ID
+crime$X <- NULL
+#rename column
+names(crime) <- c("percent_m", "is_south", "mean_education", "police_exp60", "police_exp59", "labour_participation", "m_per1000f", "state_pop", "nonwhites_per1000", "unemploy_m24", "unemploy_m39", "gdp", "inequality", "prob_prison", "time_prison", "crime_rate")
+```
+
+#Melakukan Analisis Data 
+Pertama-tama akan dilakukan pengecekan terhadap data yang akan dilakukan regresi terlebih dahulu
+
+```{r}
+str(crime)
+```
+
+Seluruh data memiliki tipe numerik, data dapat digunakan untuk kebutuhan regresi
+
+```{r include=FALSE}
+is.na(crime)
+```
+
+Dikarenakan outut yang dihasilkan cukup panjang, tidak akan ditampilkan di report ini
+Setelah dilakukan pengecekan, data tidak memiliki missing value, tidak perlu dilakukan pre-prosesing lebih lanjut
+
+#Melakukan pengecekan col dari seluruh predictor
+```{r}
+ggcorr(crime, label = T,label_size = 2.9,  hjust = .85, size = 3,layout.exp=2)
+```
+
+Dari plot dapat terlihat variable police_exp59 dan police_exp60 saling mempengaruhi, karena hal ini, akan digunakan hanya 1 variabel saja, yaitu police_exp60 dalam predictor.
+
+```{r}
+#remove variable
+crime$police_exp59 <- NULL
+```
+
+#Melakukan Feature Selection dengan Stepwise 
+Akan dilakukan feature Selection dengan menggunakan metode stepwise, membandingkan 3 arah (forward, backward, both)
+
+```{r}
+#Set up initial model
+lm.0 <- lm(crime_rate ~1, crime)
+lm.all <- lm(crime_rate ~., crime)
+```
+###Backward
+```{r}
+#Melakukan pemodelan dengan menggunakan backward selection
+lm.bw <- step(lm.all, direction="backward")
+```
+###Both
+```{r}
+#Melakukan pemodelan dengan menggunakan both(forward and backward) selection
+lm.bt <- step(lm.0, scope=list(upper=lm.all),direction="both")
+```
+###Forward
+```{r}
+#Melakukan pemodelan dengan menggunakan forkward selection
+lm.fw <- step(lm.0, scope=list(lower=lm.0, upper=lm.all),direction="forward")
+```
+###Summary Forward
+```{r}
+summary(lm.fw)
+```
+###Summary Both
+```{r}
+summary(lm.bt)
+```
+###Summary Backward
+```{r}
+summary(lm.bw)
+```
+
+Dari hasil summary 3 model diatas, jika dailihat dari Adj R-squarenya, model yang terbaik adalah model yang menggunakan 8 predictor, yaitu percent_m + mean_education + police_exp60 + m_per1000f + unemploy_m24 + unemploy_m39 + inequality + prob_prison, yang didapatkan dari metode stepwise backward. Selanjutnya akan dicek distribusi dari residual untuk dilihat apakah residual menyebar secara distribusi normal.
+
+```{r}
+hist(lm.bw$residuals, breaks = 10)
+```
+
+```{r}
+shapiro.test(lm.bw$residuals)
+```
+
+Berdasarkan histogram diatas, dapat dilihat residual menyebar secara normal, hal ini dapat dicek juga di dalam hasil saphiro test, dimana nilai p-valuenya 0.8 atau dapat dikatakan sangat besar, dimana hal ini menandakan residual menyebar secara distribusi normal
+
+Selanjutnya akan dilakukan pengecekan kondisi colinearity dari model saat ini, dengan plot heatmap yang sama dengan yang dilakukan pada awal pembentukan model
+
+```{r}
+crimemodel <- crime[,c("percent_m","mean_education","police_exp60","m_per1000f","unemploy_m24","unemploy_m39","inequality","prob_prison")]
+ggcorr(crimemodel, label = T,label_size = 2.9,hjust = .85, size = 3,layout.exp=2)
+```
+
+Dari plot diatas, dapat dilihat tidak ada predictor yang sangat mempengaruhi sesamaa predictor lain nya, akan dilakukan juga pengecekan hal ini menggunakan metode vif
+
+```{r}
+vif(lm.bw)
+```
+
+Dari hasil test diatas, dapat dilihat tidak ada predictor yang memiliki nilai vif 10, yang berarti tidak ada predictor yang mempengaruhi predictor lain nya
+
+Selanjutnya akan dilakukan pengecekan heteroskedasticity (melakukan pengecekan pola residual)
+
+```{r}
+plot(crime$crime_rate, lm.bw$residuals)
+abline(h = 0, col="red")
+```
+```{r}
+bptest(lm.bw)
+```
+
+Dari plot diatas, dapat terlihat residual menyebar secara acak atau tidak memiliki pola, dapat dilihat juga di dalam Breusch-Pagan test yang dilakukan, p value menunjukkan angka diatas 0.05, hal ini berarti model sudah menangkap pola yang ada di dalam data dengan baik
+
+Akan dilakukan pengecekan menghilangkan variable yang memiliki nilai vif diatas 4, dimulai dari yang tertinggi yaitu  yaitu unemploy_m39
+
+```{r}
+#remove unemploy_m39
+lm2 <- lm(crime_rate~percent_m+mean_education+police_exp60+m_per1000f+unemploy_m24+inequality+prob_prison,crime)
+vif(lm2)
+```
+
+Setelah dilakukan pengecekan vif kembali, tidak ada nilai vif diatas 4 saat ini, maka selanjutnya akan di cek summary dari model yang dibentuk di atas
+
+```{r}
+#pngecekan summary dari model baru
+summary(lm2)
+```
+
+Dari percobaan diatas, dalam kasus ini, menghilangkan nilai dengan vif tinggi > 4 ternyata akan mengurangi nilai r square dari model, dengan kata lain kualitas model menjadi lebih buruk. Selanjutnya akan dilakukan pengecekan seluruh kombinasi variable yang ada, yang mana yang akan menghasilkan nilai R square terbesar
+
+#Melakukan pengecekan all possible R square dengan menggunakan package leaps
+```{r}
+crm <- regsubsets(crime_rate ~ percent_m+is_south+mean_education+police_exp60+labour_participation+m_per1000f+state_pop+nonwhites_per1000+unemploy_m24+unemploy_m39+gdp+inequality+prob_prison+time_prison, crime, nbest=1)
+plot(crm, scale="adjr", main="All possible regression: ranked by Adjusted R-squared")
+```
+
+Dari plot diatas, dapat dilihat nilai R square terbaik dihasilkan oleh variabel yang sama dengan yang dihasilkan menggunakan metode stepwise backward selection
+
+#Additional Test, pelakukan pengecekan prediksi ke data baru
+
+Read data dan melakukan prediksi terhadap data menggunakan model yang telah dibentuk 
+```{r}
+crimex <- read.csv("new_crime.csv")
+prd <- predict(lm.bw, crimex)
+```
+Akan dilakukan pengecekan besarnya error dari model
+
+```{r}
+cat("Error Model :", sqrt(mean((crimex$crime_rate - prd)^2)),"\n")
+cat("Range Y Train Data :", range(crime$crime_rate), "\n")
+cat("Range Y Test Data :", range(crimex$crime_rate), "\n")
+```
+
+Dapat dilihat dari pengecekan error dengan metode RMSE, error yang dihasilkan memiliki nilai 163, jika dilihat dari range data, error yang dihasilkan dapat dibilang tergolong cukup tinggi.
+
+
+#Additional Test, Regresi dengan menggunakan Gradient Descend Algorithm
+
+Pertama, melakukan Inisialisasi Data dan Preprocessing data untuk pemodelan
+
+```{r}
+#Inisialisasi Data (Menggunakan variabel yang sama dengan model sebelumnya), Memisahkan X (Predictor) dab Y(Target)
+X <- crime[,c("percent_m","mean_education","police_exp60","m_per1000f","unemploy_m24","unemploy_m39","inequality","prob_prison")]
+y <- crime$crime_rate
+Prepx <- function(X){
+#Normalisasi data menggunakan z-score
+for (p in seq(1, ncol(X), by=1)) {
+X[,p] <- (X[,p] - mean(X[,p])) / sd(X[,p])
+}
+#Inisialisasi data untuk intercept
+X$ones <- 1
+#ubah X sebagai matrix
+X <- as.matrix(X)
+return(X)
+}
+Prepy <- function(y){
+#Normalisasi data menggunakan z-score
+y <- (y-mean(y))/sd(y)
+return(y)
+}
+X <- Prepx(X)
+y <- Prepy(y)
+#Pengecekan Range untuk kebutuhan Denormalisasi
+range(crime$crime_rate)
+```
+
+Range dari target y adalah 342 - 1993, ini akan digunakan nantinya untuk komparasi denormalisasi data.
+
+Selanjutnya akan melakukan inisialisasi variabel dari fungsi
+
+```{r}
+#Inisialisasi variabel untuk fungsi
+m <- as.numeric(nrow(X))
+n <- as.numeric(ncol(X))
+alpha <- 0.01
+num_iter <- 50000
+J_history <<- matrix(0, num_iter+1, 1)
+theta <- as.vector(matrix(0, n, 1))
+J_history[1,1] <- 1
+```
+
+Membuat fungsi algoritma Gradient Descend
+
+```{r}
+#Gradient Descend
+GD <- function(X,y,alpha,num_iter,m,n) {
+  for (i in seq(1, num_iter, by=1)){
+    thetabckp <- theta
+    theta <- theta - ((alpha*(1/m))*as.vector(colSums(as.vector(rowSums(t(as.vector(theta)*t(X))) - y)*X)))
+    J_history[i+1,1] <- computeCostMulti(X,y,theta,m)
+    if ((J_history[i+1,1]-J_history[i,1]) > 0){
+      theta <- thetabckp
+      break
+    }
+  }
+return(theta)
+}
+
+computeCostMulti <- function(X,y,theta,m){
+  J <- 0
+  J <<- (1/(2*m)) * sum((((rowSums(t(as.vector(theta)*t(X))) - y))^2))
+}
+thetaPred <- GD(X,y,alpha,num_iter,m,n)
+```
+
+Melakukan prediksi, dan pengecekan terhadap hasil prediksi
+
+```{r  warning=FALSE}
+#Melakukan Prediksi Terhadap Data
+ypred<-rowSums(t((thetaPred*t(X))))
+cat("Error Model :", sqrt(mean((y - ypred)^2)), "\n")
+cat("Range Actual Y :", range(y) , "\n")
+cat("Range Y Predict :", range(ypred) , "\n")
+cat("Adj. R Square Model :", 1-(1- sum((ypred - mean(y))^2)/sum((y - mean(y))^2))*(m-1)/(m-(n-1)-1) , "\n")
+```
+
+Melakukan Denormalisasi data, dan melakukan pengecekan terhadap hasil prediksi setelah di denormaslisasi
+
+```{r}
+#Denormalize Data
+y <- y*sd(crime$crime_rate)+mean(crime$crime_rate)
+ypred <- ypred*sd(crime$crime_rate)+mean(crime$crime_rate)
+cat("Range Actual Y :", range(y) , "\n")
+cat("Range Actual Y :", range(ypred) , "\n")
+cat("Error Model :", sqrt(mean((y - ypred)^2)), "\n")
+```
+
+Denomalisasi berhasil, range data sama sepert yang sebelumnya
+
+Dengan menggunakan algoritma gradient descend, dengan variabel yang sama dengan model sebelumnya, didapatkan nilai Adj R squarenya di angka 0.74, nilai yang tidak jauh berbeda dengan nilai Adj R Square di model sebelumnya. nilai error berkisar di angka 175, dapat dikatakan itu adalah nilai yang cukup besar, jika dilihat dari range data yang berkisar di angka 342 - 1993
+
+selanjutnya akan dilakukan pengecekan multicol, heteroskedasticity, dan normality dari data
+
+##Heteroskedasticity
+```{r}
+Res <- y-ypred
+plot(y, Res)
+abline(h = 0, col="red")
+```
+
+##Normality
+```{r}
+hist(Res, breaks = 10)
+shapiro.test(lm.bw$residuals)
+```
+
+##Multicolinearity
+```{r warning=FALSE}
+ggcorr(X, label = T,label_size = 2.9, hjust = .85, size = 3,layout.exp=2)
+```
+
+Melakukan pengecekan VIF dari masing masing variabel prediktor
+
+```{r warning=FALSE}
+vif <- data.frame(matrix(0, 8, 2))
+colnames(vif) <- c("Var","VIF")
+X <- crime[,c("percent_m","mean_education","police_exp60","m_per1000f","unemploy_m24","unemploy_m39","inequality","prob_prison")]
+y <- crime$crime_rate
+X <- Prepx(X)
+y <- Prepy(y)
+thetaPred <- GD(X,y,alpha,num_iter,m,n)
+ypred<-rowSums(t((thetaPred*t(X))))
+vif[1,1]<-"crime rate"
+vif[1,2]<- 1/(1-(sum((ypred - mean(y))^2)/sum((y - mean(y))^2)))
+X <- crime[,c("crime_rate","mean_education","police_exp60","m_per1000f","unemploy_m24","unemploy_m39","inequality","prob_prison")]
+y <- crime$percent_m
+X <- Prepx(X)
+y <- Prepy(y)
+thetaPred <- GD(X,y,alpha,num_iter,m,n)
+ypred<-rowSums(t((thetaPred*t(X))))
+vif[2,1]<-"percent_m"
+vif[2,2]<- 1/(1-(sum((ypred - mean(y))^2)/sum((y - mean(y))^2)))
+X <- crime[,c("crime_rate","percent_m","police_exp60","m_per1000f","unemploy_m24","unemploy_m39","inequality","prob_prison")]
+y <- crime$mean_education
+X <- Prepx(X)
+y <- Prepy(y)
+thetaPred <- GD(X,y,alpha,num_iter,m,n)
+ypred<-rowSums(t((thetaPred*t(X))))
+vif[3,1]<-"mean_education"
+vif[3,2]<- 1/(1-(sum((ypred - mean(y))^2)/sum((y - mean(y))^2)))
+X <- crime[,c("crime_rate","percent_m","mean_education","m_per1000f","unemploy_m24","unemploy_m39","inequality","prob_prison")]
+y <- crime$police_exp60
+X <- Prepx(X)
+y <- Prepy(y)
+thetaPred <- GD(X,y,alpha,num_iter,m,n)
+ypred<-rowSums(t((thetaPred*t(X))))
+vif[4,1]<-"police_exp60"
+vif[4,2]<- 1/(1-(sum((ypred - mean(y))^2)/sum((y - mean(y))^2)))
+X <- crime[,c("crime_rate","percent_m","mean_education","m_per1000f","police_exp60","unemploy_m39","inequality","prob_prison")]
+y <- crime$unemploy_m24
+X <- Prepx(X)
+y <- Prepy(y)
+thetaPred <- GD(X,y,alpha,num_iter,m,n)
+ypred<-rowSums(t((thetaPred*t(X))))
+vif[5,1]<-"unemploy_m24"
+vif[5,2]<- 1/(1-(sum((ypred - mean(y))^2)/sum((y - mean(y))^2)))
+X <- crime[,c("crime_rate","percent_m","mean_education","m_per1000f","police_exp60","unemploy_m24","inequality","prob_prison")]
+y <- crime$unemploy_m39
+X <- Prepx(X)
+y <- Prepy(y)
+thetaPred <- GD(X,y,alpha,num_iter,m,n)
+ypred<-rowSums(t((thetaPred*t(X))))
+vif[6,1]<-"unemploy_m39"
+vif[6,2]<- 1/(1-(sum((ypred - mean(y))^2)/sum((y - mean(y))^2)))
+X <- crime[,c("crime_rate","percent_m","mean_education","m_per1000f","police_exp60","unemploy_m24","unemploy_m39","prob_prison")]
+y <- crime$inequality
+X <- Prepx(X)
+y <- Prepy(y)
+thetaPred <- GD(X,y,alpha,num_iter,m,n)
+ypred<-rowSums(t((thetaPred*t(X))))
+vif[7,1]<-"inequality"
+vif[7,2]<- 1/(1-(sum((ypred - mean(y))^2)/sum((y - mean(y))^2)))
+X <- crime[,c("crime_rate","percent_m","mean_education","m_per1000f","police_exp60","unemploy_m24","unemploy_m39","inequality")]
+y <- crime$prob_prison
+X <- Prepx(X)
+y <- Prepy(y)
+thetaPred <- GD(X,y,alpha,num_iter,m,n)
+ypred<-rowSums(t((thetaPred*t(X))))
+vif[8,1]<-"prob_prison"
+vif[8,2]<- 1/(1-(sum((ypred - mean(y))^2)/sum((y - mean(y))^2)))
+vif
+```
+
+Dari test diatas, dapat dikatakan model sudah membentuk data dengan baik, tidak ada nilai vif > 10, residual menyebar secara distribusi normal dan residual tidak memiliki pola
+
+#End Report
+
+
