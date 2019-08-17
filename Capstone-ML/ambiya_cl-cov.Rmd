@@ -1,0 +1,842 @@
+---
+title: "CapstoneML_Ambiya"
+author: "Ambiya Sang Aji"
+date: "June 25, 2019"
+output:
+  html_document:
+    theme: cosmo
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: false
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(reshape2)
+library(caret)
+library(lubridate)
+library(xts)
+library(padr)
+library(caret)
+library(randomForest)
+library(keras)
+```
+
+
+#Overview
+
+Dalam project ini, penulis akan melakukan pembuatan model klasifikasi untuk data xxxx, perusahaan transportasi online dari xxxx. dalam kasus ini akan dibuat model untuk melakukan klasifikasi apakah jumlah driver di sebuah area telah memenuhi demand dari customer atau tidak, akan di klasifikasikan menjadi dua kelas, yaitu "sufficient" dan "insufficient". variabel yang akan digunakan untuk melakukan klasifikasi adalah jumlah area dan data timestamp.
+
+Pertama-tama akan dilakukan pengecekan terhadap data
+
+
+#Read and Analyze Data
+
+```{r}
+scotty <- read.csv("scotty-cl-cov/data/data-train.csv")
+head(scotty)
+```
+
+Terlihat diatas bahwa belum ada field yang menentukan apakah lokasi tersebut terdapat sufficient driver atau tidak.
+
+
+Akan dilakukan pengecekan tiped data dari variabel
+
+```{r}
+str(scotty)
+```
+
+Dikarenakan tipe data dari start time masih berupa factor, akan diubah menjadi timestamp
+
+```{r}
+scotty$start_time <- gsub("T"," ",scotty$start_time)
+scotty$start_time <- gsub("Z","",scotty$start_time)
+scotty$start_time <- as.POSIXct(strptime(scotty$start_time, "%Y-%m-%d %H:%M:%S"))
+```
+
+Akan dilakukan pengecekan nilai null value di variabel timestamp, src_area dan status
+
+```{r}
+sum(is.na(scotty$start_time))
+sum(is.na(scotty$src_area))
+sum(is.na(scotty$status))
+```
+
+Tidak ada data N/A.
+
+Pertama-tama akan dilakukan aggregasi data untuk dijadikan per jam terlebih dahulu
+
+##Aggregate Data
+
+```{r}
+levels(scotty$src_area)
+```
+
+Akan dilakukan pemisahan data per area terlebih dahulu
+
+```{r}
+scottyArea1 <-  scotty %>% 
+  select(src_area, start_time, status) %>% 
+  filter(src_area == "sxk3")
+dummy <- dummyVars("~ status", data = scottyArea1)
+dummy <- data.frame(predict(dummy, newdata = scottyArea1))
+scottyArea1 <- scottyArea1[,-3]
+scottyArea1 <- cbind(scottyArea1,dummy)
+
+scottyArea1 <- scottyArea1 %>% 
+  mutate(date = date(start_time), hour = hour(start_time), minutes = minute(start_time)) %>% 
+  group_by(date,hour,src_area) %>% 
+  summarise(confirmed = sum(status.confirmed), nodrivers = sum(status.nodrivers))
+```
+
+```{r}
+scottyArea2 <-  scotty %>% 
+  select(src_area, start_time, status) %>% 
+  filter(src_area == "sxk8")
+dummy <- dummyVars("~ status", data = scottyArea2)
+dummy <- data.frame(predict(dummy, newdata = scottyArea2))
+scottyArea2 <- scottyArea2[,-3]
+scottyArea2 <- cbind(scottyArea2,dummy)
+
+scottyArea2 <- scottyArea2 %>% 
+  mutate(date = date(start_time), hour = hour(start_time), minutes = minute(start_time)) %>% 
+  group_by(date,hour,src_area) %>% 
+  summarise(confirmed = sum(status.confirmed), nodrivers = sum(status.nodrivers))
+```
+
+```{r}
+scottyArea3 <-  scotty %>% 
+  select(src_area, start_time, status) %>% 
+  filter(src_area == "sxk9")
+dummy <- dummyVars("~ status", data = scottyArea3)
+dummy <- data.frame(predict(dummy, newdata = scottyArea3))
+scottyArea3 <- scottyArea3[,-3]
+scottyArea3 <- cbind(scottyArea3,dummy)
+
+scottyArea3 <- scottyArea3 %>% 
+  mutate(date = date(start_time), hour = hour(start_time), minutes = minute(start_time)) %>% 
+  group_by(date,hour,src_area) %>% 
+  summarise(confirmed = sum(status.confirmed), nodrivers = sum(status.nodrivers))
+```
+
+```{r}
+head(scottyArea1)
+head(scottyArea2)
+head(scottyArea3)
+```
+
+Setelah dicek, data tersebut secara time series tidak lengkap, akan dilakukan padding dengan nilai 0. untuk melengkapi data jam yang tidak ada.
+
+```{r warning=FALSE, message=FALSE}
+scottyArea1$start_time <- paste(scottyArea1$date,scottyArea1$hour)
+scottyArea1$start_time <- as.POSIXct(strptime(scottyArea1$start_time, "%Y-%m-%d %H"))
+scottyArea1 <- scottyArea1[,-c(1:2)]
+scottyArea2$start_time <- paste(scottyArea2$date,scottyArea2$hour)
+scottyArea2$start_time <- as.POSIXct(strptime(scottyArea2$start_time, "%Y-%m-%d %H"))
+scottyArea2 <- scottyArea2[,-c(1:2)]
+scottyArea3$start_time <- paste(scottyArea3$date,scottyArea3$hour)
+scottyArea3$start_time <- as.POSIXct(strptime(scottyArea3$start_time, "%Y-%m-%d %H"))
+scottyArea3 <- scottyArea3[,-c(1:2)]
+scottyArea1 <- scottyArea1 %>% 
+  pad() %>% 
+  fill_by_value()
+scottyArea2 <- scottyArea2 %>% 
+  pad() %>% 
+  fill_by_value()
+scottyArea3 <- scottyArea3 %>% 
+  pad() %>% 
+  fill_by_value()
+scottyArea1[,1] <- "sxk3"
+scottyArea2[,1] <- "sxk8"
+scottyArea3[,1] <- "sxk9"
+```
+
+Setelah dilakukan padding akan dilakukan pengelompokan data sebagai sufficient atau insufficient dilihat dari jumlah nodriver di jam tersebut, dan pengelompokkan data sebelumnya di padding sebagai "sufficient".
+
+```{r}
+scottyArea1 <-  scottyArea1 %>% 
+  mutate(percentnodrv = nodrivers/(nodrivers+confirmed), percentcfrm = confirmed/(nodrivers+confirmed)) %>% 
+  mutate(coverage = ifelse(percentnodrv>0,"insufficient","sufficient"))
+scottyArea1[is.na(scottyArea1$percentnodrv),7] <- "sufficient"
+scottyArea2 <-  scottyArea2 %>% 
+  mutate(percentnodrv = nodrivers/(nodrivers+confirmed), percentcfrm = confirmed/(nodrivers+confirmed)) %>% 
+  mutate(coverage = ifelse(percentnodrv>0,"insufficient","sufficient"))
+scottyArea2[is.na(scottyArea2$percentnodrv),7] <- "sufficient"
+scottyArea3 <-  scottyArea3 %>% 
+  mutate(percentnodrv = nodrivers/(nodrivers+confirmed), percentcfrm = confirmed/(nodrivers+confirmed)) %>% 
+  mutate(coverage = ifelse(percentnodrv>0,"insufficient","sufficient"))
+scottyArea3[is.na(scottyArea3$percentnodrv),7] <- "sufficient"
+```
+
+Kemudian akan dilakukan penggabungan data kembali menjadi 1 dataframe, dan melihat proporsi target variabelnya.
+
+```{r}
+prop.table(table(scottyArea1$coverage))
+prop.table(table(scottyArea2$coverage))
+prop.table(table(scottyArea3$coverage))
+scottys <- rbind(scottyArea1,scottyArea2, scottyArea3)
+prop.table(table(scottys$coverage))
+```
+
+Secara overall, kedua kelas target cukup balance
+
+Untuk area 1 dan 3 memiliki kecenderungan driver insufficient, sedangkan untuk area 2 memiliki kecenderungan data sufficient.
+
+Selanjutnya akan dilakukan pengecekan heatmap untuk setiap jam apakah lebih condong ke sufficient atau insufficient.
+
+##Plot Data
+
+```{r}
+scottyArea1s <- scottyArea1 %>%
+  mutate(hours = hour(start_time), date = date(start_time))
+ggplot(scottyArea1s, aes(x=date, y=hours)) + geom_tile(aes(fill = coverage),colour = "white") + scale_fill_manual(values = c("grey", "steelblue"))
+```
+
+Area 1 cenderung memiliki pattern insufficient di jam 06:00-24:00
+
+```{r}
+scottyArea2s <- scottyArea2 %>%
+  mutate(hours = hour(start_time), date = date(start_time))
+ggplot(scottyArea2s, aes(x=date, y=hours)) + geom_tile(aes(fill = coverage),colour = "white") + scale_fill_manual(values = c("grey", "steelblue"))
+```
+
+Area 2 cenderung memiliki pattern insufficient secara acak.
+
+```{r}
+scottyArea3s <- scottyArea3 %>%
+  mutate(hours = hour(start_time), date = date(start_time))
+ggplot(scottyArea3s, aes(x=date, y=hours)) + geom_tile(aes(fill = coverage),colour = "white") + scale_fill_manual(values = c("grey", "steelblue"))
+```
+
+Area 3 cenderung memiliki pattern insufficient di seluruh jam.
+
+Next, akan dilakukan feature engineering, dan modelling
+
+#Feature Engineering and Modelling
+
+```{r}
+scottys2 <- scottys[,-c(5,6)]
+scottys2$date <- date(scottys2$start_time)
+scottys2$hours <- hour(scottys2$start_time)
+```
+
+Akan dilakukan pemecahan data timestamp menjadi day, month, hour.
+Data year tidak akan di extract dikarenakan tujuan pembuatan model adalah melakukan prediksi klasifikasi di dalam tahun yang sama, data year tidak akan memberikan informasi yang berguna. Data tidak akan di scaling, dikarenakan data yang akan dilakukan prediksi memiliki variabel yang berisi single value, sehingga tidak bisa di scale.
+
+```{r}
+scottydata <- scottys2[,c("src_area","coverage","date","hours")]
+scottydata$day <- day(scottydata$date)
+scottydata$month <- month(scottydata$date)
+scottydata <- scottydata[,-3]
+scottydata$src_area <- as.factor(scottydata$src_area)
+scottydata$coverage <- as.factor(scottydata$coverage)
+```
+
+##Split data
+
+Data akan di bagi dengan rasio 65 train : 35 test
+```{r}
+set.seed(100)
+id <- sample(nrow(scottydata),(nrow(scottydata)*0.65))
+scottydata_train <- scottydata[id,]
+scottydata_test <- scottydata[-id,]
+```
+
+Akan dibuat juga dataset yang dilakukan downsampling
+
+Dataset dengan downsample:
+
+```{r}
+scottydata_train2 <- downSample(scottydata_train[,-2], scottydata_train$coverage, yname="Class")
+```
+
+##Modelling Using Logistic Regression
+
+Pembuatan Model 
+
+```{r warning=FALSE}
+lr.0 <- glm(coverage ~ 1, data=scottydata_train, family="binomial")
+lr.all <- glm(coverage ~ ., data=scottydata_train, family="binomial") 
+```
+
+Akan dilakukan feature selection dengan menggnakan stepwise terlebih dahulu
+
+```{r  warning=FALSE}
+lr.bw <- step(lr.all, direction="backward")
+```
+```{r  warning=FALSE}
+flr.bt <- step(lr.0, scope = list(upper=lr.all), direction="both")
+```
+
+```{r warning=FALSE}
+lr.fw <- step(lr.0, scope=list(lower=lr.0, upper=lr.all), direction="forward")
+```
+
+Ketiga stepwise telah dicoba dan menghasilkan variabel yang sama. kemudian akan dilihat summary dari model, dalam kasus ini akan dipilih salah satu, yaitu model yang dibentuk oleh stepwise backward.
+
+```{r}
+summary(lr.bw)
+```
+
+Kemudian akan dilakukan pengujian model 
+
+```{r}
+pred <- predict(lr.bw,scottydata_test[,-2], type ="response")
+ypred <- ifelse(pred>0.5,1,0)
+ypred <- factor(ypred, levels = c(0, 1), labels = c("insufficient", "sufficient"))
+confusionMatrix(ypred, scottydata_test$coverage, positive = "insufficient")
+```
+
+Model menghasilkan nilai specificity yang rendah, akan dilakukan pengecekan dengan menggunakan Downsample.
+
+##Modelling Using Logistic Regression 2 - Downsample Training Data
+
+Pembuatan Model 
+
+```{r warning=FALSE}
+lr.0 <- glm(Class ~ 1, data=scottydata_train2, family="binomial")
+lr.all <- glm(Class ~ ., data=scottydata_train2, family="binomial") 
+```
+
+Akan dilakukan feature selection dengan menggunakan stepwise terlebih dahulu
+
+```{r  warning=FALSE}
+lr.bw <- step(lr.all, direction="backward")
+```
+```{r  warning=FALSE}
+flr.bt <- step(lr.0, scope = list(upper=lr.all), direction="both")
+```
+
+```{r warning=FALSE}
+lr.fw <- step(lr.0, scope=list(lower=lr.0, upper=lr.all), direction="forward")
+```
+
+Ketiga stepwise telah dicoba dan menghasilkan variabel yang sama. kemudian akan dilihat summary dari model, dalam kasus ini akan dipilih salah satu, yaitu model yang dibentuk oleh stepwise backward.
+
+```{r}
+summary(lr.bw)
+```
+
+Kemudian akan dilakukan pengujian model 
+
+```{r}
+pred <- predict(lr.bw,scottydata_test[,-2], type ="response")
+ypred <- ifelse(pred>0.5,1,0)
+ypred <- factor(ypred, levels = c(0, 1), labels = c("insufficient", "sufficient"))
+confusionMatrix(ypred, scottydata_test$coverage, positive = "insufficient")
+```
+Model menghasilkan nilai yang cukup baik ketimbang sebelum melakukan downsampling, namun masih belum sesuai harapan untuk nilai sensitivy-nya. akan dilakukan pembuatan model dengan menggunkan algoritma lain.
+
+##Modelling using naive bayes
+
+Pembuatan Model Naive Bayes (Untuk kebutuhan pengurangan resource knitting html untuk report, Parameter Kernel yang digunakan hanya true saja dikarenakan pparameter FALSE menghasilkan nilai yang lebih jelek dibanding TRUE)
+
+```{r warning=FALSE}
+search_grid <- expand.grid(
+  usekernel = c(TRUE),
+  fL = 0:5,
+  adjust = seq(1, 5, by = 1)
+)
+set.seed(100)
+nvb <- train(x = scottydata_train[,-2], 
+               y = scottydata_train$coverage, 
+               method = 'nb', 
+               metric='ROC',
+               trControl = trainControl(method = 'repeatedcv', 
+                                        number = 5, 
+                                        repeats = 3,
+                                        classProbs = T,
+                                        summaryFunction = twoClassSummary),
+              tuneGrid = search_grid)
+```
+
+Pengecekan Iterasi Parameter Model :
+
+```{r}
+nvb
+```
+
+Pengujian Model
+
+```{r}
+nvbpredict <- predict(nvb$finalModel, scottydata_test[,-2], type="prob")
+```
+
+```{r}
+confusionMatrix(nvbpredict$class,scottydata_test$coverage, positive = "insufficient")
+```
+
+Didapatkan hasil accuracy = 77%, dan sensitivity = 67% dikarenakan nilai specificity masih sangat rendah, akan dibandingan dengan dataset training downsampling.
+
+##Modelling using naive bayes 2 - Downsampling Training Data
+
+```{r warning=FALSE}
+search_grid <- expand.grid(
+  usekernel = c(TRUE),
+  fL = 0:5,
+  adjust = seq(0, 5, by = 1)
+)
+set.seed(100)
+nvb <- train(x = scottydata_train2[,-5], 
+               y = scottydata_train2$Class, 
+               method = 'nb', 
+               metric='ROC',
+               trControl = trainControl(method = 'repeatedcv', 
+                                        number = 5, 
+                                        repeats = 3,
+                                        classProbs = T,
+                                        summaryFunction = twoClassSummary),
+              tuneGrid = search_grid)
+```
+
+Pengecekan hasil iterasi parameter
+
+```{r}
+nvb
+```
+
+Pengujian Model
+
+```{r}
+nvbpredict <- predict(nvb$finalModel, scottydata_test[,-2], type="prob")
+```
+
+```{r}
+confusionMatrix(nvbpredict$class,scottydata_test$coverage, positive='insufficient')
+```
+
+Hasil menunjukkan nilai yang lebih baik dari sebelumnya, namun untuk sensitivity masih belum mencapai target. akan dilakukan pengecekan menggunakan algoritma lain
+
+##Modelling using Decision Tree
+
+Pembuatan Model 
+
+```{r, warning=FALSE}
+search_grid <- expand.grid(
+mincriterion = seq(0.01, 1.0, by = 0.01)
+)
+
+trctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 3, classProbs = T,summaryFunction = twoClassSummary)
+set.seed(100)
+dct <- train(x = scottydata_train[,-2], 
+                   y = scottydata_train$coverage,
+                   method = "ctree",
+                   trControl=trctrl,
+                   tuneGrid = search_grid,
+                   metric = "ROC")
+```
+
+Plot tree final model
+
+```{r}
+plot(dct$finalModel)
+```
+
+Pengecekan Hasil iterasi Parameter
+
+```{r}
+dct
+```
+
+Pengujian Model.
+
+```{r}
+dctpredict2 <- predict(dct$finalModel, scottydata_test[,-2])
+confusionMatrix(dctpredict2,scottydata_test$coverage,positive='insufficient')
+```
+
+Nilai Specitivity yang dihasilkan sedikit lagi mencapai target, dan nilai sensitivity nya melebihi target.
+
+##Modelling using Decision Tree 2 - Downsampling Training Data
+
+```{r}
+search_grid <- expand.grid(
+mincriterion = seq(0.01, 1, by = 0.01)
+)
+
+trctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 3, classProbs = T, summaryFunction = twoClassSummary)
+set.seed(100)
+dct <- train(x = scottydata_train2[,-5], 
+                   y = scottydata_train2$Class,
+                   method = "ctree",
+                   trControl=trctrl,
+                   tuneGrid = search_grid,
+                   metric = "ROC")
+```
+
+Plot tree final model
+
+```{r}
+plot(dct$finalModel)
+```
+
+Pengecekan Hasil iterasi Parameter
+
+```{r}
+dct
+```
+
+Pengujian Model
+
+```{r}
+dctpredict <- predict(dct$finalModel, scottydata_test[,-2])
+confusionMatrix(dctpredict,scottydata_test$coverage,positive='insufficient')
+```
+
+Nilai specitivity meningkat dari sebelum downsampling, namun nilai sensitivity turun.
+
+##Modelling using random forest
+
+Pembuatan Model
+
+```{r, warning=FALSE}
+search_grid <- expand.grid(
+mtry = seq(from = 2, to = 4, by = 1)
+)
+
+trctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 3,classProbs = T, summaryFunction = twoClassSummary)
+set.seed(100)
+rf <- train(x = scottydata_train[,-2], 
+                   y = scottydata_train$coverage,
+                   method = "rf",
+                   trControl=trctrl,
+                   tuneGrid = search_grid,
+                   metric = "ROC")
+```
+
+Pengecekan Hasil iterasi parameter
+
+```{r}
+rf
+```
+
+Pengujian Model
+
+```{r}
+rfpredict <- predict(rf$finalModel, scottydata_test[,-2], type = "prob")
+rfpredict2 <- ifelse(rfpredict[,1] > 0.5,"insufficient","sufficient")
+rfpredict2 <- as.data.frame(rfpredict2)
+confusionMatrix(rfpredict2$rfpredict2,scottydata_test$coverage,positive='insufficient')
+```
+
+Model menghasilkan nilai yang baik, namun secara sensitivity menghasilkan nilai yang belum memenuhi target.
+
+##Modelling using Random Forest 2 - Downsampling Training Data
+
+```{r, warning=FALSE}
+search_grid <- expand.grid(
+mtry = seq(from = 2, to = 4, by = 1)
+)
+
+trctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 3,classProbs = T,summaryFunction = twoClassSummary)
+set.seed(100)
+rf <- train(x = scottydata_train2[,-5], 
+                   y = scottydata_train2$Class,
+                   method = "rf",
+                   trControl=trctrl,
+                   tuneGrid = search_grid,
+                   metric = "Sens")
+```
+
+Pengecekan hasil iterasi parameter
+
+```{r}
+rf
+```
+
+Pengujian Model
+
+```{r}
+rfpredict <- predict(rf$finalModel, scottydata_test[,-2], type = "prob")
+rfpredict2 <- ifelse(rfpredict[,1] > 0.5,"insufficient","sufficient")
+rfpredict2 <- as.data.frame(rfpredict2)
+confusionMatrix(rfpredict2$rfpredict2,scottydata_test$coverage,positive='insufficient')
+```
+
+Niali sensitivity menurun dibandingkan dengan sebelum melakukan downsampling.
+
+Telah dilakukan juga percobaan menggunakan package randomforest, namun tidak menghasilkan hasil yang berarti, mirip dengan menggunakan fungsi rf diatas. sehingga di take out dari laporan ini
+
+##Modelling Using Neural Network
+
+Melakukan Perubahan Format data sesuai dengan kebutuhan package.
+
+```{r, warning=FALSE, message=FALSE}
+scottydata_trainx <- scottydata_train[,-2]
+scottydata_trainy <- matrix(nrow=nrow(scottydata_train), ncol = 1)
+scottydata_trainy$coverage <- scottydata_train[,2]
+scottydata_testx <- scottydata_test[,-2]
+
+dummy1 <- dummyVars("~ src_area", data = scottydata_trainx)
+dummy1 <- data.frame(predict(dummy1, newdata = scottydata_trainx))
+
+dummy2 <- dummyVars("~ src_area", data = scottydata_testx)
+dummy2 <- data.frame(predict(dummy2, newdata = scottydata_testx))
+
+dummy3 <- dummyVars("~ coverage", data = scottydata_trainy)
+scottydata_trainy <- data.frame(predict(dummy3, newdata = scottydata_trainy))
+
+scottydata_trainx <- cbind(scottydata_trainx,dummy1)
+scottydata_trainx <- scottydata_trainx[,-1]
+
+scottydata_testx <- cbind(scottydata_testx,dummy2)
+scottydata_testx <- scottydata_testx[,-1]
+
+scottydata_testx <- as.matrix(scottydata_testx)
+scottydata_trainx <- as.matrix(scottydata_trainx)
+scottydata_trainy <- as.matrix(scottydata_trainy)
+```
+
+Set Model (telah dilakukan percobaan beberapa konfigurasi, namun sejauh ini, konfigurasi inilah yang terbaik yang ditemukan)
+```{r}
+set.seed(100)
+model <-  keras_model_sequential()
+model %>%
+  layer_dense(units = 128*8, activation =  "relu", input_shape =  c(6)) %>% 
+  layer_dropout(rate = 0.3) %>% 
+  layer_dense(units = 128*4, activation =  "relu") %>% 
+  layer_dropout(rate = 0.2) %>% 
+  layer_dense(units = 128*2, activation =  "relu") %>% 
+  layer_dropout(rate = 0.1) %>% 
+  layer_dense(units = 128, activation =  "relu") %>% 
+  layer_dropout(rate = 0.05) %>% 
+  layer_dense(units = 64, activation =  "relu") %>% 
+  layer_dense(units = 2, activation = "sigmoid")
+```
+
+Set Model Evaluasi.
+```{r}
+set.seed(100)
+model %>%
+  compile(
+    loss = "categorical_crossentropy",
+    optimizer = optimizer_adam(),
+    metrics = c("accuracy")
+  )
+```
+
+Fitting Model ke Data Train
+```{r results='hide'}
+set.seed(100)
+history <- model %>% fit(
+  scottydata_trainx,scottydata_trainy,
+  epochs = 40, batch_size = 907,
+  validation_split = 0.2
+)
+```
+
+
+Selanjutnya akan dilihat secara detail confusion matrixnya.
+
+```{r}
+predict <- model %>%  predict_classes(scottydata_testx)
+```
+
+```{r}
+categories <- c("insufficient", "sufficient")
+predict <- factor(predict, labels=categories)
+confusionMatrix(predict,scottydata_test$coverage)
+```
+
+Hasil menunujukkan nlai yang belum mencapai target.
+
+##Modelling Using Neural Network 2 - Downsample Training Data
+
+Melakukan Perubahan Format data sesuai dengan kebutuhan package.
+
+```{r, warning=FALSE, message=FALSE}
+scottydata_trainx <- scottydata_train2[,-5]
+scottydata_trainy <- matrix(nrow=nrow(scottydata_train2), ncol = 1)
+scottydata_trainy$coverage <- scottydata_train2[,5]
+scottydata_testx <- scottydata_test[,-2]
+
+dummy1 <- dummyVars("~ src_area", data = scottydata_trainx)
+dummy1 <- data.frame(predict(dummy1, newdata = scottydata_trainx))
+
+dummy2 <- dummyVars("~ src_area", data = scottydata_testx)
+dummy2 <- data.frame(predict(dummy2, newdata = scottydata_testx))
+
+dummy3 <- dummyVars("~ coverage", data = scottydata_trainy)
+scottydata_trainy <- data.frame(predict(dummy3, newdata = scottydata_trainy))
+
+scottydata_trainx <- cbind(scottydata_trainx,dummy1)
+scottydata_trainx <- scottydata_trainx[,-1]
+
+scottydata_testx <- cbind(scottydata_testx,dummy2)
+scottydata_testx <- scottydata_testx[,-1]
+
+scottydata_testx <- as.matrix(scottydata_testx)
+scottydata_trainx <- as.matrix(scottydata_trainx)
+scottydata_trainy <- as.matrix(scottydata_trainy)
+```
+
+Set Model (telah dilakukan percobaan beberapa konfigurasi, namun sejauh ini, konfigurasi inilah yang terbaik yang ditemukan)
+```{r}
+set.seed(100)
+model <-  keras_model_sequential()
+model %>%
+  layer_dense(units = 128*8, activation =  "relu", input_shape =  c(6)) %>% 
+  layer_dropout(rate = 0.3) %>% 
+  layer_dense(units = 128*4, activation =  "relu") %>% 
+  layer_dropout(rate = 0.2) %>% 
+  layer_dense(units = 128*2, activation =  "relu") %>% 
+  layer_dropout(rate = 0.1) %>% 
+  layer_dense(units = 128, activation =  "relu") %>% 
+  layer_dropout(rate = 0.05) %>% 
+  layer_dense(units = 64, activation =  "relu") %>% 
+  layer_dense(units = 2, activation = "sigmoid")
+```
+
+Set Model Evaluasi.
+```{r}
+set.seed(100)
+model %>%
+  compile(
+    loss = "categorical_crossentropy",
+    optimizer = optimizer_adam(),
+    metrics = c("accuracy")
+  )
+```
+
+Fitting Model ke Data Train
+```{r results='hide'}
+set.seed(100)
+history <- model %>% fit(
+  scottydata_trainx,scottydata_trainy,
+  epochs = 40, batch_size = 907,
+  validation_split = 0.2
+)
+```
+
+
+Selanjutnya akan dilihat secara detail confusion matrixnya.
+
+```{r}
+predict <- model %>%  predict_classes(scottydata_testx)
+```
+
+```{r}
+categories <- c("insufficient", "sufficient")
+predict <- factor(predict, labels=categories)
+confusionMatrix(predict,scottydata_test$coverage)
+```
+
+Saat pembuatan report ini, model menghasilkan nilai yang melebihi target. model telah di save dan dapat dicek di folder yang sama dengan nama nn_scotty.h5
+
+```{r}
+evaluate <- read.csv("scotty-cl-cov/data/data-submission.csv")
+evaluate2 <- evaluate[,c(1:2)]
+evaluate2$datetime <- gsub("T"," ",evaluate2$datetime)
+evaluate2$datetime <- gsub("Z","",evaluate2$datetime)
+evaluate2$datetime <- as.POSIXct(strptime(evaluate2$datetime, "%Y-%m-%d %H:%M:%S"))
+evaluate2$hours <- hour(evaluate2$datetime)
+evaluate2$day <- day(evaluate2$datetime)
+evaluate2$month <- month(evaluate2$datetime)
+evaluate2 <- evaluate2[,-2]
+```
+
+```{r}
+cat <- dummyVars("~ src_area", data = evaluate2)
+cat2 <- data.frame(predict(cat, newdata = evaluate2))
+evaluate2 <- cbind(evaluate2,cat2)
+evaluate2 <- evaluate2[,-1]
+evaluate2 <- as.matrix(evaluate2)
+predict <- model %>%  predict_classes(evaluate2)
+predict2 <- model %>%  predict_proba(evaluate2) 
+```
+
+```{r}
+categories <- c("insufficient", "sufficient")
+predict <- factor(predict, labels=categories)
+Submission <- evaluate
+Submission$coverage <- predict
+Submission$insufficient <- predict2[,1]
+Submission$sufficient <- predict2[,2]
+```
+
+Setaleh dilakukan pengecekan, model menghasilkan nilai : accuracy 82%, recall 86%, precision 83%, specificity 78%. milai yang sudah melewati target.
+
+#Additional Feature Engineering
+
+Dilakukan juga penghapusan feature month, dengan asumsi model digunakan untuk prediksi data desember (bulan 12), sedangkan data yang digunakan untuk train adalah bulan 10 dan 11. sehingga penghapusan data month seharusnya tidak terlalu berpengaruh, bahkan malah menambah hasil dari model. Setelah melakukan beberapa percobaan di beberapa algoritma dan config parameter yang berbeda, didapatkan nilai evaluasi yang melebihi target dengan menggunakan decision tree dengan data training tanpa downsampling, dengan parameter mincriterion = 0.45
+
+```{r}
+scottydata_train3 <- scottydata_train[,-5]
+scottydata_test2 <- scottydata_test[,-5]
+```
+
+```{r warning=FALSE}
+search_grid <- expand.grid(
+mincriterion = 0.45
+)
+
+trctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 3, classProbs = T,summaryFunction = twoClassSummary)
+set.seed(100)
+dct <- train(x = scottydata_train3[,-2], 
+                   y = scottydata_train3$coverage,
+                   method = "ctree",
+                   trControl=trctrl,
+                   tuneGrid = search_grid,
+                   metric = "ROC")
+```
+
+Plot model
+
+```{r}
+plot(dct$finalModel)
+```
+
+Pengecekan result model
+
+```{r}
+dct
+```
+
+Pengujian model
+
+```{r}
+dctpredict <- predict(dct$finalModel, scottydata_test2[,-2], type = "response")
+confusionMatrix(dctpredict,scottydata_test2$coverage,positive='insufficient')
+```
+
+Nilai di data test menghasilkan nilai yang lebih tinggi dari target.
+
+```{r}
+evaluate <- read.csv("scotty-cl-cov/data/data-submission.csv")
+evaluate2 <- evaluate[,c(1:2)]
+evaluate2$datetime <- gsub("T"," ",evaluate2$datetime)
+evaluate2$datetime <- gsub("Z","",evaluate2$datetime)
+evaluate2$datetime <- as.POSIXct(strptime(evaluate2$datetime, "%Y-%m-%d %H:%M:%S"))
+evaluate2$hours <- hour(evaluate2$datetime)
+evaluate2$day <- day(evaluate2$datetime)
+evaluate2 <- evaluate2[,-2]
+```
+
+
+```{r}
+dctpredict2 <- predict(dct$finalModel, evaluate2, type="response")
+dctpredict3 <- predict(dct$finalModel, evaluate2, type="prob")
+dctpredict3 <- unlist(dctpredict3)
+dctpredict4 <- matrix(0L, nrow = (length(dctpredict3)/2), ncol = 2) 
+for (i in 1:length(dctpredict3)){
+  if (i %% 2 == 0){
+    dctpredict4[(i/2),2] <- dctpredict3[i]
+  }
+  else if (i %% 2 != 0){
+  dctpredict4[(ceiling(i/2)),1] <- dctpredict3[i]
+  }
+}
+```
+
+```{r}
+Submission <- evaluate
+Submission$coverage <- dctpredict2
+Submission$insufficient <- dctpredict4[,1]
+Submission$sufficient <- dctpredict4[,2]
+```
+
+Model menghasilkan nilai accuracy 82%, precision 81%, Recall 88%, dan Specificity 75%
+
+Telah dilakukan juga percobaan dngan menambahkan data is weekend dan is holiday, dan melakukan preprocess PCA sebelum membuat model, namun tidak ada yang mebuat hasilnya meningkat jauh, sehingga dapat dikatakan model yang dihasilkan merupakan model yang terbaik untuk kasus ini.
