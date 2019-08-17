@@ -1,0 +1,141 @@
+---
+title: "LBB9_NN"
+author: "Ambiya Sang Aji"
+date: "June 20, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(keras)
+library(neuralnet)
+library(ggplot2)
+```
+
+#LBB - Neural Network
+Dalam Laporan ini akan dilakukan prediksi data fashion MNIST, yaitu adalah data gambar dengan size 28x28 pixel, berisikan data gambar related dengan fashion, dataset ini memiliki 10 kelas. kelas kelas tersebut adalah :
+
+0. T shirt
+1. Trouser
+2. Pullover
+3. Dress
+4. Coat
+5. Sandal
+6. Shirt
+7. Sneaker
+8. Bag
+9. Ankle Boot
+
+Akan dicoba dilakukan image clasification dengan menggunakan model neural network dengan algoritma backpro dengan menggunakan package keras 
+
+#Modelling Using Keras 
+
+#Read and Analyze Data
+```{r}
+train <- read.csv("fashionmnist/train.csv")
+test <- read.csv("fashionmnist/test.csv")
+```
+
+```{r}
+range(train$label)
+```
+
+Akan dilakukan splitting data label.
+
+```{r}
+train_x <- train[,-1]
+test_x <- test[,-1]
+train_y <- train[,1]
+test_y <- test[,1]
+```
+
+Data berisi data gradient black - white yang memiliki range 0-255, akan dilakukan scaling ke dalam range 0-1
+
+```{r}
+train_x <- train_x/255
+test_x <- test_x/255
+```
+
+##Pembuatan Model
+
+Set Arsitektur NN
+```{r}
+model <-  keras_model_sequential()
+model %>%
+  layer_dense(units = 128*8, activation =  "relu", input_shape =  c(784)) %>% 
+  layer_dropout(rate = 0.3) %>% 
+  layer_dense(units = 128*4, activation =  "relu") %>% 
+  layer_dropout(rate = 0.2) %>% 
+  layer_dense(units = 128*2, activation =  "relu") %>% 
+  layer_dropout(rate = 0.1) %>% 
+  layer_dense(units = 128, activation =  "relu") %>% 
+  layer_dropout(rate = 0.05) %>% 
+  layer_dense(units = 64, activation =  "relu") %>% 
+  layer_dense(units = 10, activation = "softmax")
+```
+
+Set Model Evaluasi.
+
+```{r}
+model %>%
+  compile(
+    loss = "categorical_crossentropy",
+    optimizer = optimizer_adam(),
+    metrics = c("accuracy")
+  )
+```
+
+Melakukan Perubahan Format data sesuai dengan kebutuhan package.
+
+```{r}
+train_y <- to_categorical(train_y)
+test_y <- to_categorical(test_y)
+train_x <- as.matrix(train_x)
+test_x <- as.matrix(test_x)
+```
+
+Fitting Model ke Data Train
+
+```{r results='hide'}
+history <- model %>% fit(
+  train_x, train_y,
+  epochs = 15, batch_size = 200,
+  validation_split = 0.2
+)
+```
+
+Berikut adalah plot historical accuracy setiap epoch 
+
+```{r}
+plotx <- matrix(nrow=history$params$epochs, ncol = 2)
+plotx[,1] <- history$metrics$acc
+plotx[,2] <- seq.int(history$params$epochs)
+plotx <- as.data.frame(plotx)
+ggplot() + 
+  geom_line(data = plotx, aes(x=plotx$V2, y=plotx$V1))
+```
+
+Dari Hasil Training, didapatkan nilai akurasi diatas 90%, akan dilakukan evaluasi model terhadap data test, namundapat dilihat akurasi yang dihasilkan dari proses learning sudah tidak stabil (naik-turun) seiring dengan berjalan nya jumlah epoch.
+
+Evaluasi Model
+
+```{r}
+model %>% 
+  evaluate(test_x,test_y)
+```
+
+Hasil testing menunjukkan akurasi diatas 84.23%, hasil yang cukup baik.
+
+Selanjutnya akan dilihat secara detail confusion matrixnya.
+
+```{r}
+predict <- model %>%  predict_classes(test_x)
+```
+
+```{r}
+categories <- c("T-shirt", "Trouser", "Pullover", "Dress", "Coat", "Sandal", "Shirt", "Sneaker", "Bag", "Boot")
+predict <- factor(predict, labels=categories)
+actual <- factor(test$label,labels=categories)
+confusionMatrix(predict,actual)
+```
