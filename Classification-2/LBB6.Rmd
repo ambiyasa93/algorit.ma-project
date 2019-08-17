@@ -1,0 +1,498 @@
+---
+title: "LBB6"
+author: "Ambiya Sang Aji"
+date: "May 24, 2019"
+output:
+  html_document:
+    theme: cosmo
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: false
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(ranger)
+library(caret)
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.asp = 0.5625,
+  fig.align = "center",
+  out.width = "85%",
+  comment = "#>"
+)
+```
+#Overview
+
+Dalam report ini, akan dilakukan prediksi dengan menggunakan dataset loan default, performansi akan diukur menggunakan accuracy, dikarenakan dalam kasus ini dibutuhkan prediksi akurat untuk kedua class, karena ada faktor risk loss jika gagal memprediksi loan default, dan jika terlalu renggang untuk memprediksi loan default, ada resiko hasil pencadangan yang harus dilakukan oleh bank akan semakin tinggi, dikarenakan setiap loan default, sebuah bank harus mencadangkan nilai untuk menutupi risk dari loss yang akan dialami. sehingga dibutuhkan model yang mampu memprediksi secara akurat kedua class.
+
+Akan dilakukan komparaasi antara 3 algoritma, yaitu naive bayes, dacision tree dan random forest dan dicoba interpretasikan dari ke 3 model tersebut performancenya.
+
+
+#Read and Analyze Data
+```{r include=FALSE}
+loan <- read.csv("loan.csv")
+is.na(loan)
+```
+
+Tidak ada dataset N/A, akan dilakukan pengecekan top 6 data
+
+```{r}
+head(loan)
+```
+
+Walaupun tidak ada data N/A, namun ada data unknown di dalam variable saving balance dan checking balance, tidak akan dilakukan processing terhadap variable tersebut, karena varriable tersebut dapat dikatakan masih termasuk sebuah factor. 
+
+Akan dilakukan splitting data terlebih dahulu untuk dijadikan train dan test dataset
+
+```{r}
+set.seed(99)
+split <- initial_split(loan, prop = 0.8, strata = "default")
+prop.table(table(training(split)$default))
+prop.table(table(testing(split)$default))
+```
+
+Target klasifikasi di dataset telah terbagi secara rata, selanjutnya akan dilakukan preprocessing lebih lanjut
+
+Tanpa Melakukan downsample :
+
+```{r}
+rec <- recipe(default ~ ., data =training(split)) %>% 
+  step_nzv(all_predictors()) %>% 
+  step_string2factor(all_nominal(),-default) %>%
+  step_string2factor(default,levels = c("yes","no")) %>%
+  step_center(all_numeric()) %>%
+  step_scale(all_numeric()) %>%
+  prep(strings_as_factors = FALSE)
+
+X <- juice(rec)
+Xtr <- bake(rec,testing(split))
+```
+
+
+#Modelling - Naive Bayes
+
+Melakukan 5-fold cross validation dengan 3 kali pengulangan untuk melihat average dari performance model, sekaligus melakukan pengecekan beberapa parameter
+
+```{r}
+search_grid <- expand.grid(
+  usekernel = c(TRUE, FALSE),
+  fL = 0:5,
+  adjust = seq(0, 5, by = 1)
+)
+set.seed(99)
+nvb <- train(x = X[,1:16], 
+               y = X$default, 
+               method = 'nb', 
+               metric='Accuracy',
+               trControl = trainControl(method = 'repeatedcv', # repeated cross validation
+                                        number = 5, # nr of partitions
+                                        repeats = 3, # nr of repeats=,
+                                        classProbs = T),
+              tuneGrid = search_grid)
+```
+
+```{r}
+nvb
+```
+
+#Testing - Naive Bayes
+
+Akan dicoba dilakukan pengecekan terhadap confusion matrixnya
+
+```{r}
+Xtrlabel <- Xtr[,17]
+Xtr <- Xtr[,-17]
+nvbpredict <- predict(nvb$finalModel, Xtr, type="raw")
+```
+
+```{r}
+confusionMatrix(nvbpredict$class,Xtrlabel$default,positive='no')
+```
+
+Didapatkan hasil accuracy = 72%, akan dilakukan preprosesing dengan melakukan downsampling, dan melakukan perbandingan terhadap hasilnya
+
+#Naive Bayes - With Downsampling
+
+Dengan Melakukan downsample :
+
+```{r}
+rec2 <- recipe(default ~ ., data =training(split)) %>% 
+  step_nzv(all_predictors()) %>% 
+  step_string2factor(all_nominal(),-default) %>%
+  step_string2factor(default,levels = c("yes","no")) %>%
+  step_downsample(default, ratio = 1/1, seed = 100) %>%
+  step_center(all_numeric()) %>%
+  step_scale(all_numeric()) %>%
+  prep(strings_as_factors = FALSE)
+
+X2 <- juice(rec2)
+Xtr2 <- bake(rec,testing(split))
+```
+
+Melakukan 5-fold cross validation dengan 3 kali pengulangan untuk melihat average dari performance model, sekaligus melakukan pengecekan beberapa parameter
+
+```{r}
+search_grid <- expand.grid(
+  usekernel = c(TRUE, FALSE),
+  fL = 0:5,
+  adjust = seq(0, 5, by = 1)
+)
+set.seed(99)
+nvb2 <- train(x = X2[,1:16], 
+               y = X2$default, 
+               method = 'nb', 
+               metric='Accuracy',
+               trControl = trainControl(method = 'repeatedcv', # repeated cross validation
+                                        number = 5, # nr of partitions
+                                        repeats = 3, # nr of repeats=,
+                                        classProbs = T),
+              tuneGrid = search_grid)
+```
+
+```{r}
+nvb2
+```
+```{r}
+Xtrlabel2 <- Xtr2[,17]
+Xtr2 <- Xtr2[,-17]
+nvbpredict2 <- predict(nvb2$finalModel, Xtr2, type="raw")
+```
+
+```{r}
+confusionMatrix(nvbpredict2$class,Xtrlabel2$default,positive='no')
+```
+
+Didapatkan hasil yang lebih baik dengan menggunakan metode downsampling, dikarenakan metode downsampling melakukan balancing terhadap jumlah class prediksi di training set 
+
+
+#Modelling - Decision Tree
+
+Akan dilakukan modelling dengan menggunakan decision tree
+
+```{r}
+search_grid <- expand.grid(
+mincriterion = seq(0.01, 10, by = 0.01)
+)
+
+trctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 3)
+set.seed(99)
+dct <- train(x = X[,1:16], 
+                   y = X$default,
+                   method = "ctree",
+                   trControl=trctrl,
+                   tuneGrid = search_grid)
+```
+```{r}
+dct
+```
+
+Tree model yang dibentuk :
+
+```{r}
+plot(dct$finalModel)
+```
+
+#Testing - Decision Tree
+
+```{r}
+dctpredict <- predict(dct$finalModel, Xtr)
+confusionMatrix(dctpredict,Xtrlabel$default,positive='no')
+```
+
+Accuracy yang dihasilkan adalah 74%, selanjutnya akan dicompare dengan menggunakan downsampling
+
+
+#Decision Tree - With Downsampling
+
+```{r}
+search_grid <- expand.grid(
+mincriterion = seq(0.01, 10, by = 0.01)
+)
+
+trctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 3)
+set.seed(99)
+dct2 <- train(x = X2[,1:16], 
+                   y = X2$default,
+                   method = "ctree",
+                   trControl=trctrl,
+                   tuneGrid = search_grid)
+```
+```{r}
+dct
+```
+
+Tree model yang dibentuk :
+
+```{r}
+plot(dct2$finalModel)
+```
+
+#Testing - Decision Tree
+
+```{r}
+dctpredict2 <- predict(dct2$finalModel, Xtr)
+confusionMatrix(dctpredict2,Xtrlabel2$default,positive='no')
+```
+
+Penggunaan downsampling dalam kasus ini menggunakan decision tree membuat accuracy dari data menurun. hipotesa hal ini dikarenakan sample yang semakin sedikit, sehingga membuat decision kurang optimal.
+
+Selanjutnya akan dicoba membuat model random forest dengan menggunakan tidymodels
+
+
+#Modelling - Random Forest
+
+Melakukan split untuk melakukan 5 fold cross validation dengan pengulangan sebanyak 3 kali
+
+```{r}
+remove(list = ls())
+
+loan <- read.csv("loan.csv")
+
+set.seed(99)
+split <- initial_split(loan, prop = 0.8, strata = "default")
+
+rec <- recipe(default ~ ., data =training(split)) %>% 
+  step_nzv(all_predictors()) %>% 
+  step_string2factor(all_nominal(),-default) %>%
+  step_string2factor(default,levels = c("yes","no")) %>%
+  step_center(all_numeric()) %>%
+  step_scale(all_numeric()) %>%
+  prep(strings_as_factors = FALSE)
+
+X <- juice(rec)
+Xtr <- bake(rec,testing(split))
+
+rec2 <- recipe(default ~ ., data =training(split)) %>% 
+  step_nzv(all_predictors()) %>% 
+  step_string2factor(all_nominal(),-default) %>%
+  step_string2factor(default,levels = c("yes","no")) %>%
+  step_downsample(default, ratio = 1/1, seed = 100) %>%
+  step_center(all_numeric()) %>%
+  step_scale(all_numeric()) %>%
+  prep(strings_as_factors = FALSE)
+
+X2 <- juice(rec2)
+Xtr2 <- bake(rec,testing(split))
+```
+
+```{r}
+set.seed(99)
+cv_split <- vfold_cv(X, v = 5, repeats = 3, strata = "default")
+```
+
+Selanjutnya dilakukan pembuatan model
+
+```{r}
+model_engine <- rand_forest(mode = "classification")
+
+model_engine <- set_engine(
+  object = model_engine,
+  engine = "ranger",
+  seed = 99,
+  num.threads = 4,
+  importance = "impurity"
+)
+```
+
+```{r}
+model_grid <- grid_regular(
+  range_set(mtry, range = c(2, ncol(X) - 1)),
+  range_set(trees, range = c(500, 1000)),
+  range_set(min_n, range = c(1, 30)),
+  levels = 3
+)
+```
+
+```{r}
+model_specs <- tibble(spec = merge(model_engine, model_grid)) %>%
+  mutate(spec_id = str_pad(row_number(), width = 2, side = "left", pad = "0"))
+
+model_grid <- model_grid %>%
+  mutate(spec_id = str_pad(row_number(), width = 2, side = "left", pad = "0"))
+
+crossed <- crossing(cv_split, model_specs)
+
+crossed <- crossed %>%
+  mutate(model = map2(spec, splits, ~
+    fit_xy(.x, x = select(analysis(.y), -default), y = select(analysis(.y), default))
+  ))
+```
+
+#Testing - Random Forest
+
+```{r}
+# get hold-out prediction in every folds
+cv_result <- crossed %>%
+  mutate(prediction = map2(model, splits, ~
+    assessment(.y) %>%
+      bind_cols(predict(.x, .)) %>%
+      bind_cols(predict(.x, ., type = "prob")) %>%
+      select(default, starts_with(".pred"))
+  ))
+
+# unnest the cv result
+cv_result <- cv_result %>%
+  select(spec_id, id, id2, prediction) %>%
+  unnest(prediction)
+
+# get metrics for every model
+grid_result <- cv_result %>%
+  group_by(spec_id, id, id2) %>%
+  summarise(
+    accuracy = accuracy_vec(default, .pred_class)
+  ) %>%
+  ungroup()
+
+# join with model grid
+grid_result <- grid_result %>% 
+  left_join(model_grid)
+```
+
+Akan dilakukan pembuatan plot untuk melakukan komparasi model mana yang terbaik
+
+```{r}
+# plot the result
+ggplot(grid_result, aes(x = as.factor(mtry), y = accuracy)) +
+  geom_boxplot(aes(fill = as.factor(trees))) +
+  coord_flip() +
+  facet_wrap(~ min_n, ncol = 3) +
+  labs(x = "mtry", y = "Accuracy", fill = "trees") +
+  theme_minimal()
+```
+
+Dari plot diatas, ditarik kesimpulan model terbaik adalah dengan menggunakan parameter tree = 750, mtry = 8 dan min_n = 15
+
+Akan dilakukan pembuatan model menggunakan variabel tersebut dan dilakukan test ke dalam data test
+
+```{r}
+model_spec2 <- rand_forest(
+  mode = "classification",
+  mtry = 8,
+  trees = 750,
+  min_n = 15
+)
+
+model_spec2 <- set_engine(
+  object = model_spec2,
+  engine = "ranger",
+  seed = 100,
+  num.threads = 4,
+  importance = "impurity"
+)
+
+model <- fit_xy(model_spec2, x = X[,-17], y = X[,17])
+```
+
+```{r}
+pred_test <- bake(rec, testing(split)) %>%
+  bind_cols(predict(model, .)) %>%
+  bind_cols(predict(model, ., type = "prob")) %>% 
+  select(default, starts_with(".pred"))
+```
+
+```{r}
+confusionMatrix(pred_test$.pred_class,Xtr$default,positive='no')
+```
+
+Model Random Forest menghasilkan model dengan accuracy 77%, lebih baik dari kedua model sebelumnya, naive bayes dan decision tree
+
+Kemudian sama seperti kedua model sebelumnya, akan dilakukan pengecekan ketika data dilakukan downsampling
+
+
+#Random Forest - With Downsampling
+
+```{r}
+set.seed(99)
+cv_split2 <- vfold_cv(X2, v = 5, repeats = 3, strata = "default")
+```
+```{r}
+crossed2 <- crossing(cv_split2, model_specs)
+
+crossed2 <- crossed2 %>%
+  mutate(model = map2(spec, splits, ~
+    fit_xy(.x, x = select(analysis(.y), -default), y = select(analysis(.y), default))
+  ))
+```
+
+```{r}
+# get hold-out prediction in every folds
+cv_result2 <- crossed2 %>%
+  mutate(prediction = map2(model, splits, ~
+    assessment(.y) %>%
+      bind_cols(predict(.x, .)) %>%
+      bind_cols(predict(.x, ., type = "prob")) %>%
+      select(default, starts_with(".pred"))
+  ))
+
+# unnest the cv result
+cv_result2 <- cv_result2 %>%
+  select(spec_id, id, id2, prediction) %>%
+  unnest(prediction)
+
+# get metrics for every model
+grid_result2 <- cv_result2 %>%
+  group_by(spec_id, id, id2) %>%
+  summarise(
+    accuracy = accuracy_vec(default, .pred_class)
+  ) %>%
+  ungroup()
+
+# join with model grid
+grid_result2 <- grid_result2 %>% 
+  left_join(model_grid)
+```
+```{r}
+# plot the result
+ggplot(grid_result2, aes(x = as.factor(mtry), y = accuracy)) +
+  geom_boxplot(aes(fill = as.factor(trees))) +
+  coord_flip() +
+  facet_wrap(~ min_n, ncol = 3) +
+  labs(x = "mtry", y = "Accuracy", fill = "trees") +
+  theme_minimal()
+```
+
+Dari plot diatas, ditarik kesimpulan model terbaik ditunjukkan oleh model dengan parameter mtry =2, min_n = 30, dan trees  = 1000
+
+Akan dilakukan pengetesan terhadap data test dengan menggunakan parameter tersebut
+
+```{r}
+model_spec3 <- rand_forest(
+  mode = "classification",
+  mtry = 2,
+  trees = 1000,
+  min_n = 30
+)
+
+model_spec3 <- set_engine(
+  object = model_spec3,
+  engine = "ranger",
+  seed = 100,
+  num.threads = 4,
+  importance = "impurity"
+)
+
+model <- fit_xy(model_spec3, x = X[,-17], y = X[,17])
+```
+
+```{r}
+pred_test2 <- bake(rec, testing(split)) %>%
+  bind_cols(predict(model, .)) %>%
+  bind_cols(predict(model, ., type = "prob")) %>% 
+  select(default, starts_with(".pred"))
+```
+
+```{r}
+confusionMatrix(pred_test2$.pred_class,Xtr2$default,positive='no')
+```
+Akurasi yang dihasilkan dengan menggunakan pre processing downsampling dalam kasus ini menggunakan random forest menunjukkan angka akurasi 75%, hasil ini masih dibawah dengan tanpa proses downsampling
+
+#Kesimpulan
+- Dari ketiga model, random forest menghasilkan model terbaik, dengan angka akurasi = 77%, namun secara komputasi random forest jauh lebih kompleks dibandiing kedua model lain nya. 
+- Preprosessing downsampling tidak selalu membuat performance model menjadi lebih baik
+
+#End Report
