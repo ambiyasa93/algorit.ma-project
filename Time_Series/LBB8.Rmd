@@ -1,0 +1,466 @@
+---
+title: "LBB8_TS"
+author: "Ambiya Sang Aji"
+date: "June 14, 2019"
+output:
+  html_document:
+    theme: cosmo
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: false
+    df_print: paged
+---
+```{r setup}
+library(forecast)
+library(MLmetrics)
+library(quantmod)
+library(MASS)
+library(TTR)
+library(ggplot2)
+library(tseries)
+```
+
+#Time Series
+
+Dalam laporan kali ini, penulis akan melakukan forecasting saham google dengan menggunakan library quantmod. forecasting kan dilakukan dengan membandingkan 3 metode, yaitu simple moving average, holt winter dan ARIMA. pertama tama akan dilakukan pengambilan data stock dengan menggunakan library quantmod.
+
+#Analyze and Preprocess Data
+
+```{r}
+#get data and check data
+getSymbols('GOOGL')
+head(GOOGL)
+tail(GOOGL)
+sum(is.na(GOOGL$GOOGL.Adjusted))
+```
+
+setelah dilakukan pengecekan oleh penulis, data stock didapatkan dari tahun 2007, dan data hanya ada untuk work day saja (senin-jumat). disini penulis akan melakukan forecasting terhadap data adjusted closing price. data juga terlihat tidak memiliki missing value
+
+```{r}
+#subset and plot data
+adj_ggl <- GOOGL[,6]
+adj_ggl <- window(adj_ggl, start='2007-01-01', end='2018-12-31')
+autoplot(adj_ggl)
+```
+
+Terlihat dari plot bahwa data memiliki trend naik, namun data terlihat tidak memiliki seasonality. akan dilakukan pengecekan decomose data
+
+```{r}
+#check mean dari jumlah row setiap tahun
+mean(nrow(window(adj_ggl, start='2007-01-01', end='2007-12-31')),
+nrow(window(adj_ggl, start='2008-01-01', end='2008-12-31')),
+nrow(window(adj_ggl, start='2009-01-01', end='2009-12-31')),
+nrow(window(adj_ggl, start='2010-01-01', end='2010-12-31')),
+nrow(window(adj_ggl, start='2011-01-01', end='2011-12-31')),
+nrow(window(adj_ggl, start='2012-01-01', end='2012-12-31')),
+nrow(window(adj_ggl, start='2013-01-01', end='2013-12-31')),
+nrow(window(adj_ggl, start='2014-01-01', end='2014-12-31')),
+nrow(window(adj_ggl, start='2015-01-01', end='2015-12-31')),
+nrow(window(adj_ggl, start='2016-01-01', end='2016-12-31')),
+nrow(window(adj_ggl, start='2017-01-01', end='2017-12-31')),
+nrow(window(adj_ggl, start='2018-01-01', end='2018-12-31')))
+```
+
+Average data 1 tahun adalah 251, akan digunakan angka 251 untuk frequency
+
+```{r}
+adj_ggl1 <- ts(log(adj_ggl),frequency = 251)
+plot(decompose(adj_ggl1))
+```
+
+Akan dlakukan pengecekan untuk mengecek apakah data memiliki seasonality atau tidak
+
+```{r}
+#check plot dari 3 tahun pertama
+c2007 <- scale(window(adj_ggl, start='2007-01-01', end='2007-12-31'))
+c2008 <- scale(window(adj_ggl, start='2008-01-01', end='2008-12-31'))
+c2009 <- scale(window(adj_ggl, start='2009-01-01', end='2009-12-31'))
+plot(c2007)
+plot(c2008)
+plot(c2009)
+```
+
+Data secara tahunan tidak mirip menandakan tidak adanya seasonality
+
+#Modelling Using SMA
+
+Data adj_ggl akan digunakan sebagai data train, dan data tahun 2019 akan digunakan sebagai data testing
+
+```{r}
+#set test data
+test <- window(GOOGL$GOOGL.Adjusted, start='2019-01-01', end='2019-06-14')
+```
+
+```{r}
+#check best n for SMA
+k <- 1
+m <- matrix(0, ncol = 3, nrow = 251)
+for (i in seq(from=3, to=251, by=1)){
+  SMA <- SMA(adj_ggl, n = i)
+  SMAFCR <- matrix(0, ncol = 1, nrow = 114+i)
+  SMAFCR[1:i,] <- tail(adj_ggl$GOOGL.Adjusted,i)
+  z <- 1
+    for (j in seq(from=i+1, to=114+i, by=1)){
+      SMAFCR[j,] <- mean(SMAFCR[z:i,])
+      z <- z+1
+      }
+  m[k,1] <- i
+  m[k,2] <- RMSE(test[,1],SMAFCR[-(1:i),1])
+  m[k,3] <- MAPE(test[,1],SMAFCR[-(1:i),1])
+  k <- k+1
+}
+m <- m[order(m[,2], decreasing = FALSE),]
+row_sub <- apply(m, 1, function(row) all(row !=0 ))
+m <- m[row_sub,]
+m[1,]
+```
+
+Model terbaik dihasilkan dengan nilai n = 201, dengan nilai RMSE 53, dan nilai MAPE sekitar 0.038
+
+Akan dilakukan plotting untuk melihat model SMA 
+
+```{r}
+#SMA using n = 201
+SMAFCR <- matrix(0, ncol = 1, nrow = 114+201)
+SMAFCR[1:201,] <- tail(adj_ggl$GOOGL.Adjusted,201)
+  z <- 1
+    for (j in seq(from=202, to=114+201, by=1)){
+      SMAFCR[j,] <- mean(SMAFCR[z:j-1,])
+      z <- z+1
+    }
+SMAFCR <- SMAFCR[-(1:201),]
+SMAFCR1 <- test
+SMAFCR1$GOOGL.Adjusted <- SMAFCR
+SMA <- SMA(adj_ggl, n = 201)
+```
+
+```{r}
+#format data for plotting purpose
+adj_ggl7 <- data.frame(Y=as.matrix(adj_ggl), date=time(adj_ggl))
+test1 <- data.frame(Y=as.matrix(test), date=time(test))
+SMA1 <- data.frame(Y=as.matrix(SMA), date=time(SMA))
+SMA1 <- SMA1[-(1:201),]
+SMAFCR2 <- data.frame(Y=as.matrix(SMAFCR1), date=time(SMAFCR1))
+```
+
+```{r}
+#Plot SMA
+ggplot()+
+ geom_line(data = adj_ggl7, aes(x = adj_ggl7$date, y = adj_ggl7$GOOGL.Adjusted))+
+ geom_line(data = test1, aes(x=test1$date, y=test1$GOOGL.Adjusted), color="darkcyan")+
+ geom_line(data=SMA1, aes(x=SMA1$date, y=SMA1$SMA), color="red")+
+ geom_line(data = SMAFCR2, aes(x=SMAFCR2$date, y=SMAFCR2$GOOGL.Adjusted), color="blue")+
+ xlab("Date")+
+ ylab("Adjusted Close Price")
+```
+
+Nilai RMSE dan MAPE nya adalah :
+```{r warning=FALSE}
+RMSE(test1$GOOGL.Adjusted,SMAFCR2$GOOGL.Adjusted)
+MAPE(test1$GOOGL.Adjusted,SMAFCR2$GOOGL.Adjusted)
+```
+
+
+Model SMA cukup baik dalam melakukan forecasting terhadap data stock. dengan nilai RMSE 55 dan MAPE 0.04. selanjutnya akan dilakukan modelling menggunakan metode double exponential smooting (Holt)
+
+#Modelling using Holt
+
+Akan dilakukan modelling beberapa kali menggunakan Holt dengan fungsi ets(), dan akan dilakukan plotting lebih lanjut untuk model dengan nilai terbaik
+
+##Holt1 - ANN
+```{r}
+#transform to log for scaling purpose
+adj_ggllg <- log(adj_ggl)
+```
+
+```{r}
+#Modelling
+HLT <- ets(y = adj_ggllg, model = "ANN")
+summary(HLT)
+```
+
+Nilai alpha yang ditemukan adalah 0.98, dengan nilai error RMSE sebesar 0.0180285
+
+```{r}
+adj_ggllg1 <- data.frame(Y=as.matrix(adj_ggllg), date=time(adj_ggllg))
+HLT1 <- adj_ggllg1
+HLT1$GOOGL.Adjusted <- HLT$fitted
+```
+
+```{r}
+ggplot()+
+ geom_line(data = adj_ggllg1, aes(x = adj_ggllg1$date, y = adj_ggllg1$GOOGL.Adjusted),color = "black")+
+ geom_line(data = HLT1, aes(x=HLT1$date, y=HLT1$GOOGL.Adjusted), color="darkcyan")
+```
+
+Akan dilakukan forecast terhadap data :
+```{r}
+HLTFCT <- forecast(HLT, h = 114)
+autoplot(HLTFCT)
+```
+
+Dilakukan pengecekan terhadap nilai errornya :
+
+```{r}
+RMSE(test1$GOOGL.Adjusted,exp(HLTFCT$mean))
+MAPE(test1$GOOGL.Adjusted,exp(HLTFCT$mean))
+```
+
+Nilai RMSE yang dihasilkan adalah 118, dengan tingkat error sekitar 10%
+
+##Holt 2 - AAN
+
+Akan dilakukan modelling dengan holt, dengan model AAN
+
+```{r}
+HLT2 <- ets(y = adj_ggllg, model = "AAN")
+summary(HLT2)
+```
+
+nilai beta alpha yang ditemukan adalah 0.98 dengan nilai beta yang mendekati 0, dengan nilai RMSE lebih kecil sedikit dari model sebelumnya, yaitu 0.01802736
+
+```{r}
+HLT3 <- adj_ggllg1
+HLT3$GOOGL.Adjusted <- HLT2$fitted
+```
+
+```{r}
+ggplot()+
+ geom_line(data = adj_ggllg1, aes(x = adj_ggllg1$date, y = adj_ggllg1$GOOGL.Adjusted),color = "black")+
+ geom_line(data = HLT3, aes(x=HLT3$date, y=HLT3$GOOGL.Adjusted), color="darkcyan")
+```
+
+```{r}
+HLTFCT2 <- forecast(HLT2, h = 114)
+autoplot(HLTFCT2)
+```
+
+Dilakukan pengecekan terhadap niali errornya :
+
+```{r}
+RMSE(test1$GOOGL.Adjusted,exp(HLTFCT2$mean))
+MAPE(test1$GOOGL.Adjusted,exp(HLTFCT2$mean))
+```
+Didapatkan nilai error lebih baik dibandingkan dengan menggunakan metode ANN
+
+Akan dilakukan plotting lebih lanhut untuk model holt 2, yang akan di plot adalah : data, model, proyeksi dan real data
+```{r}
+#format data for plotting purpose
+adj_ggl3 <- adj_ggllg1
+adj_ggl3$GOOGL.Adjusted <- exp(adj_ggl3$GOOGL.Adjusted) 
+HLT4 <- adj_ggl3
+HLT4$GOOGL.Adjusted <- exp(HLT3$GOOGL.Adjusted)
+HLTFCT2Mean <- data.frame(Y=as.matrix(exp(HLTFCT2$mean)), date=time(test1$date))
+HLTFCT2Upper <- data.frame(Y=as.matrix(exp(HLTFCT2$upper)), date=time(test1$date))
+HLTFCT2Lower <- data.frame(Y=as.matrix(exp(HLTFCT2$lower)), date=time(test1$date))
+```
+```{r}
+ggplot()+
+ geom_line(data = adj_ggl3, aes(x = adj_ggl3$date, y = adj_ggl3$GOOGL.Adjusted))+
+ geom_line(data=HLT4, aes(x=HLT4$date, y=HLT4$GOOGL.Adjusted), color="red")+
+ geom_ribbon(data =HLTFCT2Upper ,aes(ymin = HLTFCT2Upper$Y.80., ymax = HLTFCT2Upper$Y.95., x=test1$date), fill = "grey80") +
+ geom_ribbon(data =HLTFCT2Lower ,aes(ymin = HLTFCT2Lower$Y.80., ymax = HLTFCT2Lower$Y.95., x=test1$date), fill = "grey80") +
+ geom_ribbon(aes(ymin = HLTFCT2Lower$Y.80., ymax = HLTFCT2Upper$Y.80., x=test1$date), fill = "grey70") +
+ geom_line(data = test1, aes(x=test1$date, y=test1$GOOGL.Adjusted), color="darkcyan")+
+ geom_line(data = HLTFCT2Mean, aes(x=test1$date, y=HLTFCT2Mean$Y), color="blue")+
+ xlab("Date")+
+ ylab("Adjusted Close Price")
+```
+
+##Pengecekan asumsi - Holt
+Akan dilakukan pengecekan asumsi terhadap model holt
+
+###shapiro test
+```{r}
+shapiro.test(HLT2$x - HLT2$fitted)
+hist(HLT2$x - HLT2$fitted, breaks = 30)
+```
+
+Residual yang dihasilkan dibuktikan dengan menggunakan test, tidak menyebar secara normal. Namun oleh karena tujuan dari laporan ini adalah forecasting, dan didapatkan nilai yang sudah cukup bagus, maka hal ini akan diabaikan.
+
+###Ljung Box Test
+
+```{r}
+Box.test(HLT2$x - HLT2$fitted, type = "Ljung-Box")
+```
+
+Residual tidak memiliki auto korelasi
+
+Kemudian akan dilakukan modelling dengan menggunakan fungsi HoltWInter()
+
+#Modelling Using Holt Winter Function
+```{r warning=FALSE}
+#Model Creation
+lgHW <- log(adj_ggl3$GOOGL.Adjusted)
+HW <- HoltWinters(lgHW, gamma = F) 
+#Process data for plotting
+HW1 <- data.frame(HW$fitted[,1])
+HW1 <- exp(HW1)
+#plotting
+ggplot()+
+ #geom_line(data = adj_ggl3, aes(x = adj_ggl3$date, y = adj_ggl3$GOOGL.Adjusted))+
+ geom_line(data=HW1, aes(x=adj_ggl3[-(1:2),2], y=HW1$HW.fitted...1.), color="red")+
+ xlab("Date")+
+ ylab("Adjusted Close Price")
+```
+
+
+```{r}
+HW$alpha
+HW$beta
+```
+
+
+Model telah dibentuk, akan dilakukan pengecekan error
+
+```{r}
+RMSE(adj_ggl3[-(1:2),1], HW1$HW.fitted...1.)
+MAPE(adj_ggl3[-(1:2),1], HW1$HW.fitted...1.)
+```
+
+Nilai RMSE nya adalah 9 dengan error sekitar 1%
+
+```{r}
+HWFCT <- forecast(HW, h = 114)
+autoplot(HWFCT)
+```
+
+```{r}
+RMSE(test1$GOOGL.Adjusted,exp(HWFCT$mean))
+MAPE(test1$GOOGL.Adjusted,exp(HWFCT$mean))
+```
+
+Nilai yang dihasilkan function Holt Winters Menghasilkan nilai yang lebih buruk dari fungsi ets, dengan nilai RMSE 178 dan tingkat error sekitar 16%. model ini memiliki performansi yang lebih buruk ketmbang menggunakan fungsi ets()
+
+
+##Pengecekan Asumsi - Holt Winter
+
+###shapiro test
+```{r}
+shapiro.test(HW$x - HW$fitted[,1])
+hist(HW$x - HW$fitted[,1], breaks = 30)
+```
+
+Residual yang dihasilkan dibuktikan dengan menggunakan test, tidak menyebar secara normal. Namun oleh karena tujuan dari laporan ini adalah forecasting, maka hal ini akan diabaikan.
+
+###Ljung Box Test
+
+```{r}
+Box.test(HW$x - HW$fitted[,1], type = "Ljung-Box")
+```
+
+Residual tidak memiliki auto korelasi
+
+#Modelling Using ARIMA
+
+##Auto-Arima
+```{r}
+ARIMA1 <- auto.arima(adj_ggl1)
+pacf(ARIMA1$residuals)
+```
+
+```{r}
+summary(ARIMA1)
+```
+
+Hasil yang dihasilkan menggunakan auto-arima adalah menggunakan parameter p=1 dan d=1, menghasilkan nilai RMSE sekitar 0.01
+
+Akan dilakukan forecasting dengan menggunakan model arima tersebut, dan dilakukan pengecekan nilai errornya
+
+```{r}
+ARIMA1FCT <- forecast(ARIMA1, h = 114)
+ARIMA1FCT %>% 
+autoplot()
+```
+
+
+```{r}
+RMSE(test1$GOOGL.Adjusted,exp(ARIMA1FCT$mean))
+MAPE(test1$GOOGL.Adjusted,exp(ARIMA1FCT$mean))
+```
+
+Nilai error yang dihasilkan dari hasil forecasting adalah 92, dengan tingkat error sekitar 7%
+
+##Pengecekan Asumsi - ARIMA
+
+###shapiro test
+```{r}
+shapiro.test(ARIMA1$x - ARIMA1$fitted[,1])
+hist(ARIMA1$x - ARIMA1$fitted[,1], breaks = 30)
+```
+
+Residual yang dihasilkan dibuktikan dengan menggunakan test, tidak menyebar secara normal. Namun oleh karena tujuan dari laporan ini adalah forecasting, dan didapatkan nilai yang sudah cukup bagus, maka hal ini akan diabaikan.
+
+###Ljung Box Test
+
+```{r}
+Box.test(ARIMA1$x - ARIMA1$fitted[,1], type = "Ljung-Box")
+```
+
+Residual tidak memiliki auto korelasi
+
+##Manual ARIMA
+
+Sebelum melakukan modelling, akan dilakukan pengecekan setelah dilakukan differencing apakah data menjadi stasioner
+
+```{r}
+addj_ggl5 <- exp(adj_ggl1)
+adjggldiff <- diff(addj_ggl5)
+adf.test(adjggldiff)
+```
+
+data telah stasioner, seperti yang telah ditunjukkan oleh test, nilai p-value nya < 0.05, menunjukkan data telah stasioner.
+
+```{r}
+pacf(adjggldiff)
+```
+
+Nilai untuk p yang mungkin dilihat dari plot pacf nya adalah : 5,6,8,11,14,16,23,27,28,32,33
+
+Penulis melakukan trial and error dan mendapatkan nilai residual yang cukup bagis dengan nilai p = 27, q = 1
+
+```{r}
+ARIMA2 <- arima(adj_ggl1, order = c(27,1,27))
+pacf(ARIMA2$residuals)
+```
+
+```{r}
+tsdisplay(ARIMA2$residuals)
+```
+
+
+```{r}
+ARIMA2FCT <- forecast(ARIMA2, h = 114)
+ARIMA2FCT %>% 
+autoplot()
+```
+
+
+```{r}
+RMSE(test1$GOOGL.Adjusted,exp(ARIMA2FCT$mean))
+MAPE(test1$GOOGL.Adjusted,exp(ARIMA2FCT$mean))
+```
+
+Nilai yang dihasilkan masih lebih baik dengan menggunakan auto arima.
+
+##Pengecekan Asumsi - ARIMA manual
+
+###shapiro test
+```{r}
+shapiro.test(ARIMA2$residuals)
+hist(ARIMA2$residuals, breaks = 30)
+```
+
+Residual yang dihasilkan dibuktikan dengan menggunakan test, tidak menyebar secara normal. Namun oleh karena tujuan dari laporan ini adalah forecasting, dan didapatkan nilai yang sudah cukup bagus, maka hal ini akan diabaikan.
+
+###Ljung Box Test
+
+```{r}
+Box.test(ARIMA2$residuals, type = "Ljung-Box")
+```
+
+Residual tidak memiliki auto korelasi
+
+#Kesimpulan 
+Dalam kasus ini, metode Simple Moving Average menghasilkan nilai forecast yang paling baik diantara 3 metode lain nya. disusul dengan metode auto arima dan holt yang menghasilkan nilai kurang lebih mirip.
